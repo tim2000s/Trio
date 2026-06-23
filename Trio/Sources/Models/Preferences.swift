@@ -60,6 +60,7 @@ struct Preferences: JSON, Equatable {
     var boostDynIsfBgCap: Decimal = 210
     var boostDynIsfVelocity: Decimal = 100 // percent
     var boostDynIsfAdjustmentFactor: Decimal = 100 // percent
+    var boostEnableCircadianIsf: Bool = false
 }
 
 extension Preferences {
@@ -121,6 +122,7 @@ extension Preferences {
         case boostDynIsfBgCap
         case boostDynIsfVelocity
         case boostDynIsfAdjustmentFactor
+        case boostEnableCircadianIsf
     }
 }
 
@@ -363,6 +365,10 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfAdjustmentFactor) {
             preferences.boostDynIsfAdjustmentFactor = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostEnableCircadianIsf) {
+            preferences.boostEnableCircadianIsf = v
         }
 
         self = preferences

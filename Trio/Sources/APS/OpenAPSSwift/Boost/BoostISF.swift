@@ -17,6 +17,7 @@ enum BoostISF {
         sensitivityRatio: Decimal,
         currentGlucose: Decimal,
         tdd: Decimal,
+        hourOfDay: Int,
         profile: Profile,
         preferences: Preferences
     ) -> Decimal {
@@ -41,7 +42,7 @@ enum BoostISF {
             sensNormalTarget = sensProfile
         }
 
-        let variableSens = DynIsf.getIsfByProfile(
+        var variableSens = DynIsf.getIsfByProfile(
             bg: bg,
             normalTarget: normalTarget,
             insulinDivisor: divisor,
@@ -50,6 +51,12 @@ enum BoostISF {
             bgCap: bgCap,
             useCap: true
         )
+
+        // Circadian ISF overlay (time-of-day sensitivity curve), applied to variable_sens
+        // exactly as AAPS does when ApsBoostEnableCircadianIsf is on.
+        if preferences.boostEnableCircadianIsf {
+            variableSens *= CircadianISF.sensitivity(hourOfDay: hourOfDay)
+        }
 
         // Apply the autosens/TDD ratio the same way stock oref does (sens / ratio),
         // so it composes with Trio's existing sensitivity-ratio pipeline.
