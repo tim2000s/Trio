@@ -3,10 +3,15 @@ import HealthKit
 import Swinject
 
 /// Reads step + heart-rate activity from HealthKit and publishes a `BoostActivitySnapshot`
-/// for the Boost V5 engine's exercise modifiers. Observer queries (with background delivery,
-/// the entitlement is already present) refresh the snapshot when new data arrives; an initial
-/// refresh runs at launch. Inert until the user grants Health read access (queries silently
-/// return nothing) — exactly the AAPS pattern.
+/// for the Boost V5 engine's context (exercise / post-exercise / asleep). Observer queries
+/// (with background delivery) refresh on new data; an initial refresh runs at launch. Inert
+/// until the user grants Health read access (queries silently return nothing).
+///
+/// Each refresh runs the ported sensing modules: ActivityClassifier (step buckets + HR),
+/// SleepStateDetector, and PostExerciseRecovery — advancing the latter two machines from the
+/// previous snapshot's persisted state. Thresholds/windows use AAPS defaults until the Boost
+/// settings tree lands. Sleep + post-exercise are enabled here (they steer V5 conservatively:
+/// no fast-carb overnight, reduced budget post-exercise); both become user settings later.
 protocol BoostActivityMonitor {
     func refresh() async
 }
@@ -21,9 +26,9 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
     private var restingHRType: HKQuantityType? { HKObjectType.quantityType(forIdentifier: .restingHeartRate) }
     private var bpmUnit: HKUnit { HKUnit.count().unitDivided(by: .minute()) }
 
-    // Detection thresholds (conservative; shadow-only effect on dosing).
-    private let activeStepThreshold: Double = 600 // ~brisk walking sustained over 30 min
-    private let hrAboveRestingThreshold: Double = 25 // bpm over resting → likely exertion
+    // Night window (AAPS defaults) until settings land: 22:00–07:00.
+    private let nightStartMinute = 22 * 60
+    private let nightEndMinute = 7 * 60
 
     init(resolver: Resolver) {
         injectServices(resolver)
@@ -49,31 +54,86 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
 
     func refresh() async {
         let now = Date()
-        async let stepsTask = sumSteps(since: now.addingTimeInterval(-1800), now: now)
-        async let hrTask = latestQuantity(hrType, unit: bpmUnit, since: now.addingTimeInterval(-900), now: now)
+        let nowMs = now.timeIntervalSince1970 * 1000.0
+
+        async let steps5Task = sumSteps(since: now.addingTimeInterval(-300), now: now)
+        async let steps15Task = sumSteps(since: now.addingTimeInterval(-900), now: now)
+        async let steps30Task = sumSteps(since: now.addingTimeInterval(-1800), now: now)
+        async let steps60Task = sumSteps(since: now.addingTimeInterval(-3600), now: now)
+        async let hrAvgTask = avgQuantity(hrType, unit: bpmUnit, since: now.addingTimeInterval(-900), now: now)
+        async let latestHrTask = latestQuantity(hrType, unit: bpmUnit, since: now.addingTimeInterval(-900), now: now)
         async let restingTask = latestQuantity(restingHRType, unit: bpmUnit, since: now.addingTimeInterval(-7 * 86400), now: now)
 
-        let steps30 = await stepsTask
-        let latestHR = await hrTask ?? 0
-        let restingHR = await restingTask ?? 0
+        let steps5 = Int(await steps5Task)
+        let steps15 = Int(await steps15Task)
+        let steps30 = await steps30Task
+        let steps60 = Int(await steps60Task)
+        let avgHr = await hrAvgTask ?? 0
+        let latestHr = await latestHrTask ?? 0
+        let restingHr = await restingTask ?? 0
+        let restingForCalc = restingHr > 0 ? restingHr : 60
 
-        let active = steps30 >= activeStepThreshold
-            || (restingHR > 0 && latestHR >= restingHR + hrAboveRestingThreshold)
+        let prev = BoostActivityStore.shared.snapshot
 
-        var snap = BoostActivitySnapshot(
+        // 1) Activity classification (step-only by default; HR fusion off until that setting lands).
+        var thresholds = ActivityThresholds()
+        thresholds.hrRestingBpm = Int(restingForCalc)
+        let activity = ActivityClassifier.classify(ActivityInputs(
+            steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
+            avgHeartRate: avgHr, thresholds: thresholds
+        ))
+
+        // 2) Sleep state machine (autoBySleep on; thresholds = AAPS defaults).
+        let nowMinute = Calendar.current.component(.hour, from: now) * 60
+            + Calendar.current.component(.minute, from: now)
+        let sleep = SleepStateDetector.step(
+            SleepDetectorInputs(
+                avgHeartRate: avgHr,
+                restingHeartRate: restingForCalc,
+                steps15min: steps15,
+                nowMinuteOfDay: nowMinute,
+                nightStartMinute: nightStartMinute,
+                nightEndMinute: nightEndMinute,
+                preSleepLeadMin: 60,
+                sleepHysteresisMin: 10,
+                wakeHrHysteresisMin: 5,
+                mlMealLikely: nil,
+                nowMs: nowMs,
+                autoBySleep: true
+            ),
+            prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
+        )
+        let asleep = sleep.state == .sleeping
+
+        // 3) Post-exercise recovery (enabled; per-type window/scale).
+        let recovery = PostExerciseRecovery.step(
+            nowMs: nowMs,
+            exerciseActive: activity.exerciseActive,
+            exerciseType: activity.state.rawValue,
+            config: PostExerciseConfig(enabled: true),
+            state: prev?.recoveryState ?? RecoveryState()
+        )
+
+        let snap = BoostActivitySnapshot(
             steps30min: steps30,
-            latestHeartRate: latestHR,
-            restingHeartRate: restingHR,
-            exerciseActive: active,
-            lastExerciseAt: BoostActivityStore.shared.snapshot?.lastExerciseAt,
+            latestHeartRate: latestHr,
+            restingHeartRate: restingHr,
+            exerciseActive: activity.exerciseActive,
+            inPostExerciseWindow: recovery.inRecoveryWindow,
+            asleep: asleep,
+            exerciseState: activity.state.rawValue,
+            profilePercent: activity.profilePercent,
+            targetBgMgdl: activity.targetBgMgdl,
+            lastExerciseAt: activity.exerciseActive ? now : prev?.lastExerciseAt,
+            sleepState: sleep,
+            recoveryState: recovery.newState,
             updatedAt: now
         )
-        if active { snap.lastExerciseAt = now }
         BoostActivityStore.shared.snapshot = snap
 
         debug(
             .service,
-            "BoostActivityMonitor: steps30=\(Int(steps30)) hr=\(Int(latestHR)) rhr=\(Int(restingHR)) active=\(active)"
+            "BoostActivityMonitor: steps5/15/30/60=\(steps5)/\(steps15)/\(Int(steps30))/\(steps60) hr=\(Int(latestHr)) rhr=\(Int(restingHr)) state=\(activity.state.rawValue) asleep=\(asleep) postEx=\(recovery.inRecoveryWindow)"
         )
     }
 
@@ -87,6 +147,21 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
                 options: .cumulativeSum
             ) { _, stats, _ in
                 continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    private func avgQuantity(_ type: HKQuantityType?, unit: HKUnit, since: Date, now: Date) async -> Double? {
+        guard let type else { return nil }
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: since, end: now)
+            let query = HKStatisticsQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .discreteAverage
+            ) { _, stats, _ in
+                continuation.resume(returning: stats?.averageQuantity()?.doubleValue(for: unit))
             }
             healthKitStore.execute(query)
         }
