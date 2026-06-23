@@ -1,8 +1,3 @@
-// SafetyGates — V5 Phase 3 ordered safety gates. Faithful Swift port of AAPS Kotlin
-// openAPSBoostV5/SafetyGates.kt. Hard gates short-circuit (zero dose); soft gates damp
-// (multiplicative, ORDERED — order is load-bearing); final clamp rounds + spike-caps + floors at 0.
-// Plus the Fix-6 velocity scaling + state dose caps.
-
 import Foundation
 
 public enum SafetyGateConstants {
@@ -46,17 +41,38 @@ public struct Phase3Inputs {
     public var riskAtProjectedIob: ((Double) -> Double)?
     public var mlHypoRisk: Double?
 
-    public init(insulinToDeliver: Double, enableSmbPreChecks: Bool, minGuardBg: Double,
-                minGuardThreshold: Double, maxDelta: Double, bg: Double, iob: Double, maxIob: Double,
-                deltaAccl: Double, delta: Double = 0.0, baseInsulinReq: Double, roundSmbTo: Double,
-                sensorQualityOk: Bool = true, riskAtProjectedIob: ((Double) -> Double)? = nil,
-                mlHypoRisk: Double? = nil) {
-        self.insulinToDeliver = insulinToDeliver; self.enableSmbPreChecks = enableSmbPreChecks
-        self.minGuardBg = minGuardBg; self.minGuardThreshold = minGuardThreshold
-        self.maxDelta = maxDelta; self.bg = bg; self.iob = iob; self.maxIob = maxIob
-        self.deltaAccl = deltaAccl; self.delta = delta; self.baseInsulinReq = baseInsulinReq
-        self.roundSmbTo = roundSmbTo; self.sensorQualityOk = sensorQualityOk
-        self.riskAtProjectedIob = riskAtProjectedIob; self.mlHypoRisk = mlHypoRisk
+    public init(
+        insulinToDeliver: Double,
+        enableSmbPreChecks: Bool,
+        minGuardBg: Double,
+        minGuardThreshold: Double,
+        maxDelta: Double,
+        bg: Double,
+        iob: Double,
+        maxIob: Double,
+        deltaAccl: Double,
+        delta: Double = 0.0,
+        baseInsulinReq: Double,
+        roundSmbTo: Double,
+        sensorQualityOk: Bool = true,
+        riskAtProjectedIob: ((Double) -> Double)? = nil,
+        mlHypoRisk: Double? = nil
+    ) {
+        self.insulinToDeliver = insulinToDeliver
+        self.enableSmbPreChecks = enableSmbPreChecks
+        self.minGuardBg = minGuardBg
+        self.minGuardThreshold = minGuardThreshold
+        self.maxDelta = maxDelta
+        self.bg = bg
+        self.iob = iob
+        self.maxIob = maxIob
+        self.deltaAccl = deltaAccl
+        self.delta = delta
+        self.baseInsulinReq = baseInsulinReq
+        self.roundSmbTo = roundSmbTo
+        self.sensorQualityOk = sensorQualityOk
+        self.riskAtProjectedIob = riskAtProjectedIob
+        self.mlHypoRisk = mlHypoRisk
     }
 }
 
@@ -68,12 +84,21 @@ public struct GateReductions: Equatable, Sendable {
     public var decelerationBrake: Double
     public var sensorQualityCheck: Double
     public var dynamicSpikeCapped: Bool
-    public init(hardGateFired: String? = nil, maxIobClampApplied: Bool = false, iobHeadroomBrake: Double = 1.0,
-                postActionRiskCheck: Double = 1.0, decelerationBrake: Double = 1.0,
-                sensorQualityCheck: Double = 1.0, dynamicSpikeCapped: Bool = false) {
-        self.hardGateFired = hardGateFired; self.maxIobClampApplied = maxIobClampApplied
-        self.iobHeadroomBrake = iobHeadroomBrake; self.postActionRiskCheck = postActionRiskCheck
-        self.decelerationBrake = decelerationBrake; self.sensorQualityCheck = sensorQualityCheck
+    public init(
+        hardGateFired: String? = nil,
+        maxIobClampApplied: Bool = false,
+        iobHeadroomBrake: Double = 1.0,
+        postActionRiskCheck: Double = 1.0,
+        decelerationBrake: Double = 1.0,
+        sensorQualityCheck: Double = 1.0,
+        dynamicSpikeCapped: Bool = false
+    ) {
+        self.hardGateFired = hardGateFired
+        self.maxIobClampApplied = maxIobClampApplied
+        self.iobHeadroomBrake = iobHeadroomBrake
+        self.postActionRiskCheck = postActionRiskCheck
+        self.decelerationBrake = decelerationBrake
+        self.sensorQualityCheck = sensorQualityCheck
         self.dynamicSpikeCapped = dynamicSpikeCapped
     }
 }
@@ -90,32 +115,48 @@ public enum SafetyGates {
         var dose = input.insulinToDeliver
 
         // HARD gates (binary disable)
-        if !input.enableSmbPreChecks { return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "enable_smb_pre_checks")) }
-        if input.minGuardBg < input.minGuardThreshold { return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "min_guard_bg")) }
-        if input.maxDelta > C.maxDeltaBgRatioDisable * input.bg { return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "max_delta")) }
+        if !input
+            .enableSmbPreChecks
+        {
+            return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "enable_smb_pre_checks")) }
+        if input.minGuardBg < input
+            .minGuardThreshold { return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "min_guard_bg")) }
+        if input.maxDelta > C.maxDeltaBgRatioDisable * input
+            .bg { return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "max_delta")) }
 
         let headroom = max(0.0, input.maxIob - input.iob)
         var maxIobClampApplied = false
-        if dose > headroom { dose = headroom; maxIobClampApplied = true }
+        if dose > headroom { dose = headroom
+            maxIobClampApplied = true }
 
         // SOFT gates (ordered)
-        let iobBrake = iobHeadroomBrake(input.iob, input.maxIob); dose *= iobBrake
-        let parScale = postActionRiskCheck(dose: dose, currentMlHypoRisk: input.mlHypoRisk,
-                                           currentIob: input.iob, riskAtProjectedIob: input.riskAtProjectedIob); dose *= parScale
-        let decelScale = decelerationBrake(input.deltaAccl, input.delta); dose *= decelScale
-        let sensorScale = sensorQualityCheck(input.sensorQualityOk); dose *= sensorScale
+        let iobBrake = iobHeadroomBrake(input.iob, input.maxIob)
+        dose *= iobBrake
+        let parScale = postActionRiskCheck(
+            dose: dose,
+            currentMlHypoRisk: input.mlHypoRisk,
+            currentIob: input.iob,
+            riskAtProjectedIob: input.riskAtProjectedIob
+        )
+        dose *= parScale
+        let decelScale = decelerationBrake(input.deltaAccl, input.delta)
+        dose *= decelScale
+        let sensorScale = sensorQualityCheck(input.sensorQualityOk)
+        dose *= sensorScale
 
         // FINAL clamp
-        if input.roundSmbTo > 0.0 { dose = floor(dose / input.roundSmbTo + 1e-9) * input.roundSmbTo }
+        if input.roundSmbTo > 0.0 { dose = floor(dose / input.roundSmbTo + 1E-9) * input.roundSmbTo }
         let spikeCap = dynamicSpikeCap(input.baseInsulinReq)
         var spikeCapped = false
-        if dose > spikeCap { dose = spikeCap; spikeCapped = true }
+        if dose > spikeCap { dose = spikeCap
+            spikeCapped = true }
         dose = max(0.0, dose)
 
         return Phase3Result(finalDose: dose, reductions: GateReductions(
             hardGateFired: nil, maxIobClampApplied: maxIobClampApplied, iobHeadroomBrake: iobBrake,
             postActionRiskCheck: parScale, decelerationBrake: decelScale, sensorQualityCheck: sensorScale,
-            dynamicSpikeCapped: spikeCapped))
+            dynamicSpikeCapped: spikeCapped
+        ))
     }
 
     static func iobHeadroomBrake(_ iob: Double, _ maxIob: Double) -> Double {
@@ -134,11 +175,15 @@ public enum SafetyGates {
         return C.decelBrakeFloor + (1.0 - C.decelBrakeFloor) * frac
     }
 
-    static func postActionRiskCheck(dose: Double, currentMlHypoRisk: Double?, currentIob: Double,
-                                    riskAtProjectedIob: ((Double) -> Double)?) -> Double {
+    static func postActionRiskCheck(
+        dose: Double,
+        currentMlHypoRisk: Double?,
+        currentIob: Double,
+        riskAtProjectedIob: ((Double) -> Double)?
+    ) -> Double {
         guard let riskFn = riskAtProjectedIob, let current = currentMlHypoRisk else { return 1.0 }
         let projected = riskFn(currentIob + dose)
-        if projected > current + C.postActionRiskDeltaThreshold && projected > C.postActionRiskThreshold {
+        if projected > current + C.postActionRiskDeltaThreshold, projected > C.postActionRiskThreshold {
             let raw = 1.0 - (projected - C.postActionRiskThreshold) / (1.0 - C.postActionRiskThreshold)
             return max(C.postActionRiskFloor, raw)
         }
@@ -157,9 +202,12 @@ public enum SafetyGates {
         return C.velocityScaleFloor + (1.0 - C.velocityScaleFloor) * frac
     }
 
-    public static func applyStateDoseCap(_ state: MealHypothesis, _ dose: Double,
-                                         confirmedCapU: Double = SafetyGateConstants.maxConfirmedCommitDoseU,
-                                         committedCapU: Double = SafetyGateConstants.maxCommittedDoseU) -> Double {
+    public static func applyStateDoseCap(
+        _ state: MealHypothesis,
+        _ dose: Double,
+        confirmedCapU: Double = SafetyGateConstants.maxConfirmedCommitDoseU,
+        committedCapU: Double = SafetyGateConstants.maxCommittedDoseU
+    ) -> Double {
         switch state {
         case .confirmed: return min(dose, confirmedCapU)
         case .committed: return min(dose, committedCapU)
