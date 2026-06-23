@@ -332,9 +332,11 @@
 		4984D1D42EA2939E00263E83 /* WatchConfigGarminAppConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4984D1D32EA2939E00263E83 /* WatchConfigGarminAppConfigView.swift */; };
 		49B9B57F2D5768D2009C6B59 /* AdjustmentStored+Helper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49B9B57E2D5768D2009C6B59 /* AdjustmentStored+Helper.swift */; };
 		49C782A72F73D9870062B0DD /* AlertEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C782A62F73D9870062B0DD /* AlertEntry.swift */; };
+		4B4B55F95F14BCCE9AE98F06 /* IsfShadowEma.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */; };
 		4E69D45A1E2ACB2D383C7688 /* MealTimeLearner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ABBF4AAF5407C3BC0079552 /* MealTimeLearner.swift */; };
 		5075C1608E6249A51495C422 /* TargetsEditorProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BDEA2DC60EDE0A3CA54DC73 /* TargetsEditorProvider.swift */; };
 		53F2382465BF74DB1A967C8B /* PumpConfigProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8630D58BDAD6D9C650B9B39 /* PumpConfigProvider.swift */; };
+		5572CE5409F2543EA44EE666 /* DynIsf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812A0F081EAF78AE28E4303C /* DynIsf.swift */; };
 		581516A42BCED84A00BF67D7 /* DebuggingIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581516A32BCED84A00BF67D7 /* DebuggingIdentifiers.swift */; };
 		581516A92BCEEDF800BF67D7 /* NSPredicates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581516A82BCEEDF800BF67D7 /* NSPredicates.swift */; };
 		581AC4392BE22ED10038760C /* JSONConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581AC4382BE22ED10038760C /* JSONConverter.swift */; };
@@ -543,6 +545,7 @@
 		BDFF7A892D25F97D0016C40C /* TrioWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDFF7A852D25F97D0016C40C /* TrioWatchApp.swift */; };
 		BDFF7A8B2D25F97D0016C40C /* Unit Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDFF7A8A2D25F97D0016C40C /* Unit Tests.swift */; };
 		BF1667ADE69E4B5B111CECAE /* ManualTempBasalProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680C4420C9A345D46D90D06C /* ManualTempBasalProvider.swift */; };
+		C0886FDDA1C6418A23A1B383 /* NightMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */; };
 		C21FE1E72DA59C6B007D550B /* GlucoseDailyDistributionChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21FE1E62DA59C6B007D550B /* GlucoseDailyDistributionChart.swift */; };
 		C263D59F2E4267F400CBF08C /* NightscoutUploadGlucoseStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C263D59E2E4267F400CBF08C /* NightscoutUploadGlucoseStepView.swift */; };
 		C28DD7262DBA9A9E00EC02DD /* GlucosePercentileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28DD7252DBA9A9E00EC02DD /* GlucosePercentileDetailView.swift */; };
@@ -557,6 +560,7 @@
 		C2BA6B972F758E7500348E6A /* WatchNotificationHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B962F758E7500348E6A /* WatchNotificationHandler.swift */; };
 		C2BA6B992F758E7600348E6A /* NotificationIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */; };
 		C2BA6B9A2F7593C300348E6A /* NotificationIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */; };
+		C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990EDF122666600B079D37AB /* ActivityLoadTracker.swift */; };
 		C967DACD3B1E638F8B43BE06 /* ManualTempBasalStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCFE0781F9074C2917890E8 /* ManualTempBasalStateModel.swift */; };
 		CA02000000000000000010C2 /* DeliveryLimitsSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA02000000000000000010C1 /* DeliveryLimitsSyncTests.swift */; };
 		CA370FC152BC98B3D1832968 /* BasalProfileEditorRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF8BCB0C37DEB5EC377B9612 /* BasalProfileEditorRootView.swift */; };
@@ -1360,13 +1364,16 @@
 		79BDA519C9B890FD9A5DFCF3 /* ISFEditorDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ISFEditorDataFlow.swift; sourceTree = "<group>"; };
 		7ABBF4AAF5407C3BC0079552 /* MealTimeLearner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MealTimeLearner.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/MealTimeLearner.swift; sourceTree = "<group>"; };
 		7E22146D3DF4853786C78132 /* CarbRatioEditorDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorDataFlow.swift; sourceTree = "<group>"; };
+		812A0F081EAF78AE28E4303C /* DynIsf.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DynIsf.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/DynIsf.swift; sourceTree = "<group>"; };
 		8782B44544F38F2B2D82C38E /* NightscoutConfigRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NightscoutConfigRootView.swift; sourceTree = "<group>"; };
 		881E04BA5E0A003DE8E0A9C6 /* HistoryRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HistoryRootView.swift; sourceTree = "<group>"; };
 		8A9134292D63D9A1007F8874 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		8A91342B2D63D9A2007F8874 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NightMode.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/NightMode.swift; sourceTree = "<group>"; };
 		920DDB21E5D0EB813197500D /* ConfigEditorRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConfigEditorRootView.swift; sourceTree = "<group>"; };
 		9455FA2D92E77A6C4AFED8A3 /* HistoryStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HistoryStateModel.swift; sourceTree = "<group>"; };
 		96653287EDB276A111288305 /* ManualTempBasalDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ManualTempBasalDataFlow.swift; sourceTree = "<group>"; };
+		990EDF122666600B079D37AB /* ActivityLoadTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ActivityLoadTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/ActivityLoadTracker.swift; sourceTree = "<group>"; };
 		9C8D5F457B5AFF763F8CF3DF /* CarbRatioEditorProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorProvider.swift; sourceTree = "<group>"; };
 		9F9F137F126D9F8DEB799F26 /* ISFEditorProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ISFEditorProvider.swift; sourceTree = "<group>"; };
 		A0A48AE3AC813A49A517846A /* NightscoutConfigStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NightscoutConfigStateModel.swift; sourceTree = "<group>"; };
@@ -1519,6 +1526,7 @@
 		C2BA6B962F758E7500348E6A /* WatchNotificationHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchNotificationHandler.swift; sourceTree = "<group>"; };
 		C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationIdentifiers.swift; sourceTree = "<group>"; };
 		C377490C77661D75E8C50649 /* ManualTempBasalRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ManualTempBasalRootView.swift; sourceTree = "<group>"; };
+		C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = IsfShadowEma.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/IsfShadowEma.swift; sourceTree = "<group>"; };
 		C8D1A7CA8C10C4403D4BBFA7 /* TreatmentsDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TreatmentsDataFlow.swift; sourceTree = "<group>"; };
 		CA02000000000000000010C1 /* DeliveryLimitsSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryLimitsSyncTests.swift; sourceTree = "<group>"; };
 		CAD96C5592948DEAF68F7FBA /* BoostMLModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostMLModels.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostMLModels.swift; sourceTree = "<group>"; };
@@ -3107,6 +3115,10 @@
 				33FD3B5042A7DB7B3E5DB5C4 /* SleepStateDetector.swift */,
 				69FC5A0E4CD45E195C20E9BA /* ActivityClassifier.swift */,
 				7ABBF4AAF5407C3BC0079552 /* MealTimeLearner.swift */,
+				812A0F081EAF78AE28E4303C /* DynIsf.swift */,
+				C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */,
+				990EDF122666600B079D37AB /* ActivityLoadTracker.swift */,
+				8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */,
 			);
 			name = BoostPort;
 			sourceTree = SOURCE_ROOT;
@@ -5400,6 +5412,10 @@
 				334031105B5EDC35F3FAE7DC /* SleepStateDetector.swift in Sources */,
 				7B7CBBA58522B7B0FC8B3E96 /* ActivityClassifier.swift in Sources */,
 				4E69D45A1E2ACB2D383C7688 /* MealTimeLearner.swift in Sources */,
+				5572CE5409F2543EA44EE666 /* DynIsf.swift in Sources */,
+				4B4B55F95F14BCCE9AE98F06 /* IsfShadowEma.swift in Sources */,
+				C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */,
+				C0886FDDA1C6418A23A1B383 /* NightMode.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
