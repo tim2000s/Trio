@@ -60,10 +60,57 @@ struct FeatureSettingsView: BaseView {
                 }
             )
             .listRowBackground(Color.chart)
+
+            if state.boostMode != .off {
+                Section(header: Text("Boost V5 Tuning")) {
+                    boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.3, step: 0.05)
+                    boostSlider("Hypo Caution", $state.boostV5HypoCaution, in: 1.0 ... 2.0, step: 0.05)
+                    boostSlider("Sensitivity", $state.boostV5Sensitivity, in: 0.8 ... 1.2, step: 0.05)
+                    boostSlider("Confirmed cap (U)", $state.boostV5ConfirmedCapU, in: 0 ... 5, step: 0.05)
+                    boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 1, step: 0.05)
+                    Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
+                }
+                .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost Dynamic ISF"),
+                    footer: Text(
+                        "Applies only in Active mode. Use TDD derives ISF from total daily dose; Circadian ISF applies a time-of-day sensitivity curve."
+                    )
+                ) {
+                    Toggle("Use TDD", isOn: $state.boostUseTdd)
+                    Toggle("Circadian ISF", isOn: $state.boostEnableCircadianIsf)
+                }
+                .listRowBackground(Color.chart)
+            }
         }
         .scrollContentBackground(.hidden)
         .background(appState.trioBackgroundColor(for: colorScheme))
         .navigationTitle("Feature Settings")
         .navigationBarTitleDisplayMode(.automatic)
+    }
+
+    @ViewBuilder private func boostSlider(
+        _ title: String,
+        _ value: Binding<Decimal>,
+        in range: ClosedRange<Double>,
+        step: Double
+    ) -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(String(format: "%.2f", (value.wrappedValue as NSDecimalNumber).doubleValue))
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { (value.wrappedValue as NSDecimalNumber).doubleValue },
+                    set: { value.wrappedValue = Decimal($0) }
+                ),
+                in: range,
+                step: step
+            )
+        }
     }
 }
