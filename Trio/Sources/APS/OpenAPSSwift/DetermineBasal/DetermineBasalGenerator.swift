@@ -170,12 +170,27 @@ enum DeterminationGenerator {
             )
         }
 
-        // this is the `sens` variable in JS, it's the adjusted sensitivity
-        let adjustedSensitivity = computeAdjustedSensitivity(
-            sensitivity: profile.sens ?? profile.sensitivityFor(time: currentTime),
-            sensitivityRatio: sensitivityRatio,
-            trioCustomOrefVariables: trioCustomOrefVariables
-        )
+        // this is the `sens` variable in JS, it's the adjusted sensitivity.
+        // Boost active mode swaps in Boost DynISF here, so eventualBG/predictions/insulinReq
+        // (and therefore V5's baseInsulinReq) are all Boost-flavoured. Shadow/off stay stock.
+        let baseSensitivity = profile.sens ?? profile.sensitivityFor(time: currentTime)
+        let adjustedSensitivity: Decimal
+        if preferences.boostMode == .active {
+            adjustedSensitivity = BoostISF.adjustedSensitivity(
+                profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
+                sensitivityRatio: sensitivityRatio,
+                currentGlucose: currentGlucose,
+                tdd: trioCustomOrefVariables.tdd(profile: profile),
+                profile: profile,
+                preferences: preferences
+            )
+        } else {
+            adjustedSensitivity = computeAdjustedSensitivity(
+                sensitivity: baseSensitivity,
+                sensitivityRatio: sensitivityRatio,
+                trioCustomOrefVariables: trioCustomOrefVariables
+            )
+        }
 
         let (adjustedGlucoseTargets, threshold) = adjustGlucoseTargets(
             profile: profile,
