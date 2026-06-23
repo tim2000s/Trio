@@ -19,6 +19,14 @@ extension Settings {
         @Published var closedLoop = false
         @Published var debugOptions = false
         @Published var boostMode: BoostMode = .off
+        @Published var boostV5Aggression: Decimal = 1.0
+        @Published var boostV5HypoCaution: Decimal = 1.0
+        @Published var boostV5Sensitivity: Decimal = 1.0
+        @Published var boostV5ConfirmedCapU: Decimal = 1.0
+        @Published var boostV5CommittedCapU: Decimal = 0.25
+        @Published var boostV5FastCarbConfirm: Bool = true
+        @Published var boostUseTdd: Bool = false
+        @Published var boostEnableCircadianIsf: Bool = false
         @Published var serviceUIType: ServiceUI.Type?
         @Published var setupTidepool = false
 
@@ -33,6 +41,14 @@ extension Settings {
             subscribeSetting(\.debugOptions, on: $debugOptions) { debugOptions = $0 }
             subscribeSetting(\.closedLoop, on: $closedLoop) { closedLoop = $0 }
             subscribePreferencesSetting(\.boostMode, on: $boostMode) { boostMode = $0 }
+            subscribePreferencesSetting(\.boostV5Aggression, on: $boostV5Aggression) { boostV5Aggression = $0 }
+            subscribePreferencesSetting(\.boostV5HypoCaution, on: $boostV5HypoCaution) { boostV5HypoCaution = $0 }
+            subscribePreferencesSetting(\.boostV5Sensitivity, on: $boostV5Sensitivity) { boostV5Sensitivity = $0 }
+            subscribePreferencesSetting(\.boostV5ConfirmedCapU, on: $boostV5ConfirmedCapU) { boostV5ConfirmedCapU = $0 }
+            subscribePreferencesSetting(\.boostV5CommittedCapU, on: $boostV5CommittedCapU) { boostV5CommittedCapU = $0 }
+            subscribePreferencesSetting(\.boostV5FastCarbConfirm, on: $boostV5FastCarbConfirm) { boostV5FastCarbConfirm = $0 }
+            subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
+            subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
             broadcaster.register(SettingsObserver.self, observer: self)
 
             buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"

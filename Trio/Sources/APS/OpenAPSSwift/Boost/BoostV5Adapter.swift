@@ -24,6 +24,16 @@ enum BoostV5Adapter {
         }
     }
 
+    /// User-tunable V5 knobs (from Preferences). Ranges match AAPS.
+    struct V5Knobs {
+        var aggression: Double = 1.0
+        var hypoCaution: Double = 1.0
+        var sensitivity: Double = 1.0
+        var confirmedCapU: Double = 1.0
+        var committedCapU: Double = 0.25
+        var fastCarbConfirm: Bool = true
+    }
+
     static func run(
         determination: Determination,
         glucoseStatus: GlucoseStatus,
@@ -33,6 +43,7 @@ enum BoostV5Adapter {
         roundSmbTo: Double,
         microBolusAllowed: Bool,
         mode: BoostMode,
+        knobs: V5Knobs,
         clock: Date,
         store: BoostV5Store = .shared
     ) -> Result {
@@ -96,7 +107,12 @@ enum BoostV5Adapter {
             exerciseActive: activity.exerciseActive,
             inPostExerciseWindow: activity.inPostExerciseWindow,
             asleep: activity.asleep,
-            fastCarbConfirmEnabled: true
+            fastCarbConfirmEnabled: knobs.fastCarbConfirm,
+            aggressionUserKnob: knobs.aggression,
+            hypoCautionUserKnob: knobs.hypoCaution,
+            sensitivityUserKnob: knobs.sensitivity,
+            confirmedCapU: knobs.confirmedCapU,
+            committedCapU: knobs.committedCapU
         )
 
         let decision = BoostV5Engine.decide(inputs, persisted: store.loadState())

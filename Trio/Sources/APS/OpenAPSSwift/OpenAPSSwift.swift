@@ -107,6 +107,14 @@ struct OpenAPSSwift {
                     roundSmbTo: 0.05,
                     microBolusAllowed: microBolusAllowed,
                     mode: boostMode,
+                    knobs: BoostV5Adapter.V5Knobs(
+                        aggression: (preferences.boostV5Aggression as NSDecimalNumber).doubleValue,
+                        hypoCaution: (preferences.boostV5HypoCaution as NSDecimalNumber).doubleValue,
+                        sensitivity: (preferences.boostV5Sensitivity as NSDecimalNumber).doubleValue,
+                        confirmedCapU: (preferences.boostV5ConfirmedCapU as NSDecimalNumber).doubleValue,
+                        committedCapU: (preferences.boostV5CommittedCapU as NSDecimalNumber).doubleValue,
+                        fastCarbConfirm: preferences.boostV5FastCarbConfirm
+                    ),
                     clock: clock
                 )
                 det.reason += " " + result.reason
