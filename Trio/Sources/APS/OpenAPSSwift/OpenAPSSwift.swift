@@ -94,9 +94,12 @@ struct OpenAPSSwift {
             // V5-active overrides Boost-V1's SMB. baseInsulinReq = the stock determination's
             // insulinReq — V5 adds no sensitivity logic of its own. ──
             let boostMode = BoostV5Store.shared.mode
-            if boostMode != .off, let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose) {
+            if boostMode != .off,
+               var det = rawDetermination,
+               let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose)
+            {
                 let decision = BoostV5Adapter.run(
-                    determination: rawDetermination,
+                    determination: det,
                     glucoseStatus: glucoseStatus,
                     glucose: glucose,
                     maxIob: (preferences.maxIOB as NSDecimalNumber).doubleValue,
@@ -104,10 +107,11 @@ struct OpenAPSSwift {
                     microBolusAllowed: microBolusAllowed,
                     clock: clock
                 )
-                rawDetermination.reason += " " + BoostV5Adapter.reasonTag(decision, mode: boostMode)
+                det.reason += " " + BoostV5Adapter.reasonTag(decision, mode: boostMode)
                 if boostMode == .active {
-                    rawDetermination.units = Decimal(decision.finalDose)
+                    det.units = Decimal(decision.finalDose)
                 }
+                rawDetermination = det
             }
 
             return try .success(JSONBridge.to(rawDetermination))
