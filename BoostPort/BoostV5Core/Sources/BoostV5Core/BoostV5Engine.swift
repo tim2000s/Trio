@@ -82,7 +82,7 @@ public struct V5Inputs {
     }
 }
 
-public struct V5PersistedState: Equatable, Sendable {
+public struct V5PersistedState: Codable, Equatable, Sendable {
     public var mealHypothesis: MealHypothesisState
     public var mlMealLikelyNullStreak: Int
     public init(mealHypothesis: MealHypothesisState = MealHypothesisState(), mlMealLikelyNullStreak: Int = 0) {
