@@ -1,5 +1,5 @@
 {
-  "originHash" : "1e72c1cdf8ea5ec9fe527ebfab01ea55fca9e8651fe3252338fd3d4ea2cb327a",
+  "originHash" : "b271d5de8862534ec5ccf9ccfd7ce226afa7ed4c799b7066ccbe2281782402a1",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -278,15 +278,6 @@
       "state" : {
         "revision" : "b685b549fe4d8ae265fc7a2f27d0789720425d69",
         "version" : "2.10.0"
-      }
-    },
-    {
-      "identity" : "tidepoolkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/tidepool-org/TidepoolKit",
-      "state" : {
-        "branch" : "dev",
-        "revision" : "5c92b4ffc29cabf07609b367e3f82d0f733a6bc1"
       }
     }
   ],
