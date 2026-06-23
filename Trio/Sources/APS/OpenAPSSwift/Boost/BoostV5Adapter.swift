@@ -68,6 +68,10 @@ enum BoostV5Adapter {
         let mlHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
         let mlMealLikely = BoostMLModels.mealLikely(mlFeatures)
 
+        // ── HealthKit activity (steps + HR) → V5 exercise modifiers. Snapshot is kept fresh
+        // by BoostActivityMonitor; flags() guards on staleness. Inert until Health read is granted. ──
+        let activity = BoostActivityStore.shared.flags(now: clock)
+
         let inputs = V5Inputs(
             delta: delta,
             shortAvgDelta: shortAvg,
@@ -89,14 +93,20 @@ enum BoostV5Adapter {
             recentLowBg: recentLowBg(glucose, now: clock),
             cumulativeRise30min: max(0.0, shortAvg * 6.0),
             hour: hour,
-            exerciseActive: false, // HealthKit activity wired in a later phase
-            inPostExerciseWindow: false,
+            exerciseActive: activity.exerciseActive,
+            inPostExerciseWindow: activity.inPostExerciseWindow,
             fastCarbConfirmEnabled: true
         )
 
         let decision = BoostV5Engine.decide(inputs, persisted: store.loadState())
         store.saveState(decision.newPersistedState)
-        let reason = reasonTag(decision, mode: mode, mlHypoRisk: mlHypoRisk, mlMealLikely: mlMealLikely)
+        let reason = reasonTag(
+            decision,
+            mode: mode,
+            mlHypoRisk: mlHypoRisk,
+            mlMealLikely: mlMealLikely,
+            activity: activity
+        )
         return Result(decision: decision, reason: reason)
     }
 
@@ -107,13 +117,18 @@ enum BoostV5Adapter {
     }
 
     /// Compact telemetry string appended to the determination reason (shadow + active).
-    static func reasonTag(_ d: V5Decision, mode: BoostMode, mlHypoRisk: Double?, mlMealLikely: Double?) -> String {
+    static func reasonTag(
+        _ d: V5Decision,
+        mode: BoostMode,
+        mlHypoRisk: Double?,
+        mlMealLikely: Double?,
+        activity: (exerciseActive: Bool, inPostExerciseWindow: Bool)
+    ) -> String {
         let st = d.mealHypothesis.rawValue
         let smb = String(format: "%.2f", d.finalDose)
-        let ml = { () -> String in
-            func fmt(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "n/a" }
-            return " ml(hypo=\(fmt(mlHypoRisk)) meal=\(fmt(mlMealLikely)))"
-        }()
-        return "boostV5[\(mode.rawValue)]: state=\(st) score=\(String(format: "%.2f", d.score)) wouldSMB=\(smb)U;\(ml)"
+        func fmt(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "n/a" }
+        let ml = " ml(hypo=\(fmt(mlHypoRisk)) meal=\(fmt(mlMealLikely)))"
+        let act = activity.exerciseActive ? " exercise" : (activity.inPostExerciseWindow ? " postEx" : "")
+        return "boostV5[\(mode.rawValue)]: state=\(st) score=\(String(format: "%.2f", d.score)) wouldSMB=\(smb)U;\(ml)\(act)"
     }
 }
