@@ -61,6 +61,13 @@ struct Preferences: JSON, Equatable {
     var boostDynIsfVelocity: Decimal = 100 // percent
     var boostDynIsfAdjustmentFactor: Decimal = 100 // percent
     var boostEnableCircadianIsf: Bool = false
+    // V5 tuning knobs (ranges match AAPS).
+    var boostV5Aggression: Decimal = 1.0 // 0.7…1.3 — scales CONFIRMED dose
+    var boostV5HypoCaution: Decimal = 1.0 // 1.0…2.0 — deepens ML hypo damping
+    var boostV5Sensitivity: Decimal = 1.0 // 0.8…1.2 — budget lever
+    var boostV5ConfirmedCapU: Decimal = 1.0 // 0…5 U
+    var boostV5CommittedCapU: Decimal = 0.25 // 0…1 U
+    var boostV5FastCarbConfirm: Bool = true
 }
 
 extension Preferences {
@@ -123,6 +130,12 @@ extension Preferences {
         case boostDynIsfVelocity
         case boostDynIsfAdjustmentFactor
         case boostEnableCircadianIsf
+        case boostV5Aggression
+        case boostV5HypoCaution
+        case boostV5Sensitivity
+        case boostV5ConfirmedCapU
+        case boostV5CommittedCapU
+        case boostV5FastCarbConfirm
     }
 }
 
@@ -369,6 +382,30 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostEnableCircadianIsf) {
             preferences.boostEnableCircadianIsf = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5Aggression) {
+            preferences.boostV5Aggression = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5HypoCaution) {
+            preferences.boostV5HypoCaution = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5Sensitivity) {
+            preferences.boostV5Sensitivity = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5ConfirmedCapU) {
+            preferences.boostV5ConfirmedCapU = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5CommittedCapU) {
+            preferences.boostV5CommittedCapU = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {
+            preferences.boostV5FastCarbConfirm = v
         }
 
         self = preferences
