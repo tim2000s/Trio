@@ -1,0 +1,84 @@
+import XCTest
+@testable import BoostV5Core
+
+/// End-to-end V5 decision engine: the full decide() pipeline (score → state → budget → multiplier
+/// → velocity → caps → safety gates), matching the AAPS DetermineBasalBoostV5.decide() behaviour.
+final class BoostV5EngineTests: XCTestCase {
+
+    private func baseInputs(
+        state: MealHypothesisState,
+        deltaHistory: [Double] = [3, 4, 5],
+        delta: Double = 5, deltaAccl: Double = 5, bg: Double = 150, eventualBg: Double = 150,
+        minGuardBg: Double = 100, iob: Double = 0.3, maxIob: Double = 5, baseInsulinReq: Double = 1.0,
+        cumulativeRise30min: Double = 60, recentLowBg: Double = 120, mlMealLikely: Double? = 0.5,
+        fastConfirm: Bool = false
+    ) -> V5Inputs {
+        V5Inputs(
+            delta: delta, shortAvgDelta: delta, deltaAccl: deltaAccl, bg: bg, eventualBg: eventualBg,
+            targetBg: 100, maxDelta: abs(delta), minGuardBg: minGuardBg, minGuardThreshold: 80,
+            deltaHistory: deltaHistory, iob: iob, maxIob: maxIob, baseInsulinReq: baseInsulinReq,
+            roundSmbTo: 0.05, enableSmbPreChecks: true, mlHypoRisk: nil, mlMealLikely: mlMealLikely,
+            recentLowBg: recentLowBg, cumulativeRise30min: cumulativeRise30min, hour: 13,
+            exerciseActive: false, inPostExerciseWindow: false, fastCarbConfirmEnabled: fastConfirm)
+    }
+
+    func testIdleNoMealGivesNoDoseEvenWithReq() {
+        // IDLE: action mult 1.0 → dose ≈ baseInsulinReq, but the state machine stays IDLE on a flat trace.
+        let i = baseInputs(state: MealHypothesisState(), delta: 0, deltaAccl: 0, eventualBg: 95,
+                           cumulativeRise30min: 0, mlMealLikely: 0.0)
+        let d = BoostV5Engine.decide(i, persisted: V5PersistedState())
+        XCTAssertEqual(d.mealHypothesis, .idle)
+    }
+
+    func testConfirmedCommitIsCappedAtOneUnit() {
+        // Fast-carb path → CONFIRMED with a large baseInsulinReq; the 1.0U CONFIRMED cap must bind.
+        let i = baseInputs(state: MealHypothesisState(), delta: 12, deltaAccl: 30, eventualBg: 160,
+                           baseInsulinReq: 3.0, mlMealLikely: 0.7, fastConfirm: true)
+        let d = BoostV5Engine.decide(i, persisted: V5PersistedState())
+        XCTAssertEqual(d.mealHypothesis, .confirmed)
+        XCTAssertLessThanOrEqual(d.finalDose, SafetyGateConstants.maxConfirmedCommitDoseU + 1e-9)
+        XCTAssertGreaterThan(d.finalDose, 0.0)
+    }
+
+    func testMinGuardHardGateZeroesDose() {
+        let i = baseInputs(state: MealHypothesisState(state: .confirmed, committedInSession: true),
+                           minGuardBg: 70)   // below threshold 80
+        let d = BoostV5Engine.decide(i, persisted: V5PersistedState(mealHypothesis: MealHypothesisState(state: .confirmed, committedInSession: true)))
+        XCTAssertEqual(d.finalDose, 0.0)
+        XCTAssertEqual(d.phase3.reductions.hardGateFired, "min_guard_bg")
+    }
+
+    func testMaxIobClampLimitsDose() {
+        // iob 4.9 of maxIob 5.0 → headroom 0.1 caps the dose.
+        let i = baseInputs(state: MealHypothesisState(), delta: 12, deltaAccl: 30, eventualBg: 160,
+                           iob: 4.9, maxIob: 5.0, baseInsulinReq: 3.0, mlMealLikely: 0.7, fastConfirm: true)
+        let d = BoostV5Engine.decide(i, persisted: V5PersistedState())
+        XCTAssertLessThanOrEqual(d.finalDose, 0.1 + 1e-9)
+    }
+
+    func testStatePersistsAcrossCycles() {
+        // A fresh CONFIRMED then next cycle should advance to COMMITTED.
+        let i1 = baseInputs(state: MealHypothesisState(), delta: 12, deltaAccl: 30, eventualBg: 160,
+                            mlMealLikely: 0.7, fastConfirm: true)
+        let d1 = BoostV5Engine.decide(i1, persisted: V5PersistedState())
+        XCTAssertEqual(d1.mealHypothesis, .confirmed)
+        let d2 = BoostV5Engine.decide(i1, persisted: d1.newPersistedState)
+        XCTAssertEqual(d2.mealHypothesis, .committed)
+    }
+
+    func testVelocityScaledDoseFactor() {
+        XCTAssertEqual(SafetyGates.velocityScaledDoseFactor(60), 1.0, accuracy: 1e-9)   // sharp → full
+        XCTAssertEqual(SafetyGates.velocityScaledDoseFactor(25), 0.40, accuracy: 1e-9)  // slow → floor
+        XCTAssertEqual(SafetyGates.velocityScaledDoseFactor(37.5), 0.70, accuracy: 1e-9) // midpoint
+    }
+
+    func testVelocityScalingTrimsSlowMeal() {
+        // Use a small baseInsulinReq so neither hits the COMMITTED cap (else the cap masks scaling).
+        let confirmed = MealHypothesisState(state: .confirmed, committedInSession: true)
+        let slow = baseInputs(state: confirmed, baseInsulinReq: 0.2, cumulativeRise30min: 25)
+        let fast = baseInputs(state: confirmed, baseInsulinReq: 0.2, cumulativeRise30min: 60)
+        let dSlow = BoostV5Engine.decide(slow, persisted: V5PersistedState(mealHypothesis: confirmed))
+        let dFast = BoostV5Engine.decide(fast, persisted: V5PersistedState(mealHypothesis: confirmed))
+        XCTAssertLessThan(dSlow.insulinToDeliver, dFast.insulinToDeliver)
+    }
+}
