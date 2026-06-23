@@ -181,6 +181,7 @@ enum DeterminationGenerator {
                 sensitivityRatio: sensitivityRatio,
                 currentGlucose: currentGlucose,
                 tdd: trioCustomOrefVariables.tdd(profile: profile),
+                hourOfDay: Calendar.current.component(.hour, from: currentTime),
                 profile: profile,
                 preferences: preferences
             )
