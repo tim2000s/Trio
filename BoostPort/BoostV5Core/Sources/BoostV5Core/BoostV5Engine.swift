@@ -1,13 +1,3 @@
-// BoostV5Engine — the V5 Observe-Confirm-Commit orchestrator. Faithful Swift port of AAPS Kotlin
-// openAPSBoostV5/DetermineBasalBoostV5.kt `decide()`. Pure function over inputs + prior state.
-//
-//   Phase 1: meal score → state machine step → aggression budget
-//   Phase 2: budget × action_multiplier(state)  → velocity scale → state dose cap
-//   Phase 3: ordered safety gates → final SMB
-//
-// baseInsulinReq MUST be the host loop's (Boost-flavoured / Trio-oref) insulinReq — V5 adds no
-// sensitivity logic of its own. The Trio adapter supplies it from the stock Determination.
-
 import Foundation
 
 public struct V5Inputs {
@@ -66,19 +56,41 @@ public struct V5Inputs {
         confirmedCapU: Double = SafetyGateConstants.maxConfirmedCommitDoseU,
         committedCapU: Double = SafetyGateConstants.maxCommittedDoseU
     ) {
-        self.delta = delta; self.shortAvgDelta = shortAvgDelta; self.deltaAccl = deltaAccl; self.bg = bg
-        self.eventualBg = eventualBg; self.targetBg = targetBg; self.maxDelta = maxDelta
-        self.minGuardBg = minGuardBg; self.minGuardThreshold = minGuardThreshold; self.deltaHistory = deltaHistory
-        self.iob = iob; self.maxIob = maxIob; self.baseInsulinReq = baseInsulinReq; self.roundSmbTo = roundSmbTo
-        self.enableSmbPreChecks = enableSmbPreChecks; self.mlHypoRisk = mlHypoRisk; self.mlMealLikely = mlMealLikely
-        self.riskAtProjectedIob = riskAtProjectedIob; self.recentLowBg = recentLowBg
-        self.cumulativeRise30min = cumulativeRise30min; self.hour = hour; self.exerciseActive = exerciseActive
-        self.inPostExerciseWindow = inPostExerciseWindow; self.asleep = asleep
-        self.fastCarbConfirmEnabled = fastCarbConfirmEnabled; self.sensorQualityOk = sensorQualityOk
-        self.profileSwitched = profileSwitched; self.pumpDisconnected = pumpDisconnected
-        self.loopSuspended = loopSuspended; self.timeJumpMinutes = timeJumpMinutes
-        self.aggressionUserKnob = aggressionUserKnob; self.hypoCautionUserKnob = hypoCautionUserKnob
-        self.sensitivityUserKnob = sensitivityUserKnob; self.confirmedCapU = confirmedCapU; self.committedCapU = committedCapU
+        self.delta = delta
+        self.shortAvgDelta = shortAvgDelta
+        self.deltaAccl = deltaAccl
+        self.bg = bg
+        self.eventualBg = eventualBg
+        self.targetBg = targetBg
+        self.maxDelta = maxDelta
+        self.minGuardBg = minGuardBg
+        self.minGuardThreshold = minGuardThreshold
+        self.deltaHistory = deltaHistory
+        self.iob = iob
+        self.maxIob = maxIob
+        self.baseInsulinReq = baseInsulinReq
+        self.roundSmbTo = roundSmbTo
+        self.enableSmbPreChecks = enableSmbPreChecks
+        self.mlHypoRisk = mlHypoRisk
+        self.mlMealLikely = mlMealLikely
+        self.riskAtProjectedIob = riskAtProjectedIob
+        self.recentLowBg = recentLowBg
+        self.cumulativeRise30min = cumulativeRise30min
+        self.hour = hour
+        self.exerciseActive = exerciseActive
+        self.inPostExerciseWindow = inPostExerciseWindow
+        self.asleep = asleep
+        self.fastCarbConfirmEnabled = fastCarbConfirmEnabled
+        self.sensorQualityOk = sensorQualityOk
+        self.profileSwitched = profileSwitched
+        self.pumpDisconnected = pumpDisconnected
+        self.loopSuspended = loopSuspended
+        self.timeJumpMinutes = timeJumpMinutes
+        self.aggressionUserKnob = aggressionUserKnob
+        self.hypoCautionUserKnob = hypoCautionUserKnob
+        self.sensitivityUserKnob = sensitivityUserKnob
+        self.confirmedCapU = confirmedCapU
+        self.committedCapU = committedCapU
     }
 }
 
@@ -86,7 +98,8 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
     public var mealHypothesis: MealHypothesisState
     public var mlMealLikelyNullStreak: Int
     public init(mealHypothesis: MealHypothesisState = MealHypothesisState(), mlMealLikelyNullStreak: Int = 0) {
-        self.mealHypothesis = mealHypothesis; self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
+        self.mealHypothesis = mealHypothesis
+        self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
     }
 }
 
@@ -106,38 +119,45 @@ public struct V5Decision {
 }
 
 public enum BoostV5Engine {
-
     /// One full V5 cycle. Pure over inputs + prior state.
     public static func decide(_ inputs: V5Inputs, persisted: V5PersistedState) -> V5Decision {
         let (resetState, didReset) = MealHypothesisEngine.resetIfNeeded(
             current: persisted.mealHypothesis,
             profileSwitched: inputs.profileSwitched, pumpDisconnected: inputs.pumpDisconnected,
-            loopSuspended: inputs.loopSuspended, timeJumpMinutes: inputs.timeJumpMinutes)
+            loopSuspended: inputs.loopSuspended, timeJumpMinutes: inputs.timeJumpMinutes
+        )
 
         let nextNullStreak = inputs.mlMealLikely == nil ? persisted.mlMealLikelyNullStreak + 1 : 0
         let scoreResult = MealSignalScoreEngine.mealSignalScore(
             delta: inputs.delta, deltaAccl: inputs.deltaAccl, mlMealLikely: inputs.mlMealLikely,
             recentLowBg: inputs.recentLowBg, hour: inputs.hour, exerciseActive: inputs.exerciseActive,
-            cumulativeRise30min: inputs.cumulativeRise30min, mlMealLikelyNullStreak: nextNullStreak)
+            cumulativeRise30min: inputs.cumulativeRise30min, mlMealLikelyNullStreak: nextNullStreak
+        )
 
         let newHypothesisState = MealHypothesisEngine.step(
             current: resetState, score: scoreResult.score, eventualBg: inputs.eventualBg,
             targetBg: inputs.targetBg, delta: inputs.delta, deltaAccl: inputs.deltaAccl,
             deltaDeclining: MealHypothesisEngine.deltaDeclining(inputs.deltaHistory, windowCycles: 2),
             asleep: inputs.asleep, exerciseActive: inputs.exerciseActive,
-            fastConfirmEnabled: inputs.fastCarbConfirmEnabled)
+            fastConfirmEnabled: inputs.fastCarbConfirmEnabled
+        )
 
         let budget = AggressionBudgetEngine.aggressionBudget(
             baseInsulinReq: inputs.baseInsulinReq, mlHypoRisk: inputs.mlHypoRisk,
             inPostExerciseWindow: inputs.inPostExerciseWindow,
-            hypoCautionUserKnob: inputs.hypoCautionUserKnob, sensitivityUserKnob: inputs.sensitivityUserKnob)
+            hypoCautionUserKnob: inputs.hypoCautionUserKnob, sensitivityUserKnob: inputs.sensitivityUserKnob
+        )
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
         let rawInsulinToDeliver = budget.budget * actionMult
         let velocityFactor = SafetyGates.velocityScaledDoseFactor(inputs.cumulativeRise30min)
         let velocityScaled = rawInsulinToDeliver * velocityFactor
-        let insulinToDeliver = SafetyGates.applyStateDoseCap(newHypothesisState.state, velocityScaled,
-            confirmedCapU: inputs.confirmedCapU, committedCapU: inputs.committedCapU)
+        let insulinToDeliver = SafetyGates.applyStateDoseCap(
+            newHypothesisState.state,
+            velocityScaled,
+            confirmedCapU: inputs.confirmedCapU,
+            committedCapU: inputs.committedCapU
+        )
 
         let phase3 = SafetyGates.applyPhase3(Phase3Inputs(
             insulinToDeliver: insulinToDeliver, enableSmbPreChecks: inputs.enableSmbPreChecks,
@@ -145,13 +165,15 @@ public enum BoostV5Engine {
             maxDelta: inputs.maxDelta, bg: inputs.bg, iob: inputs.iob, maxIob: inputs.maxIob,
             deltaAccl: inputs.deltaAccl, delta: inputs.delta, baseInsulinReq: inputs.baseInsulinReq,
             roundSmbTo: inputs.roundSmbTo, sensorQualityOk: inputs.sensorQualityOk,
-            riskAtProjectedIob: inputs.riskAtProjectedIob, mlHypoRisk: inputs.mlHypoRisk))
+            riskAtProjectedIob: inputs.riskAtProjectedIob, mlHypoRisk: inputs.mlHypoRisk
+        ))
 
         return V5Decision(
             finalDose: phase3.finalDose, score: scoreResult.score, scoreComponents: scoreResult.components,
             mlWeightsRenormalized: scoreResult.mlWeightsRenormalized, mealHypothesis: newHypothesisState.state,
             mealHypothesisAge: newHypothesisState.ageCycles, stateReset: didReset, aggressionBudget: budget,
             actionMultiplier: actionMult, insulinToDeliver: insulinToDeliver, phase3: phase3,
-            newPersistedState: V5PersistedState(mealHypothesis: newHypothesisState, mlMealLikelyNullStreak: nextNullStreak))
+            newPersistedState: V5PersistedState(mealHypothesis: newHypothesisState, mlMealLikelyNullStreak: nextNullStreak)
+        )
     }
 }

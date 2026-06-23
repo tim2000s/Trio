@@ -1,8 +1,3 @@
-// MealSignalScore + MealActionMultiplier — V5 Phase 1.a + Phase 2.
-// Faithful Swift port of AAPS Kotlin openAPSBoostV5/MealSignalScore.kt + MealActionMultiplier.kt.
-// Pure logic. The continuous 0–1 meal score (6–7 weighted signals) drives the state machine;
-// the action multiplier turns state → dose fraction of the aggression budget.
-
 import Foundation
 
 public enum MealScoreConstants {
@@ -34,7 +29,6 @@ public struct ScoreResult: Equatable, Sendable {
 }
 
 public enum MealSignalScoreEngine {
-
     public static func mealSignalScore(
         delta: Double,
         deltaAccl: Double,
@@ -60,11 +54,11 @@ public enum MealSignalScoreEngine {
         if renormalize {
             rawScore = C.mlMealRenormalizeFactor * (
                 C.weightDelta * deltaTerm +
-                C.weightDeltaAccl * deltaAcclTerm +
-                C.weightNotRecentlyLow * notRecentlyLowTerm +
-                C.weightMealTimeOfDay * mealTimeOfDayTerm +
-                C.weightNotExercising * notExercisingTerm +
-                C.weightSustainedRise * sustainedRiseTerm
+                    C.weightDeltaAccl * deltaAcclTerm +
+                    C.weightNotRecentlyLow * notRecentlyLowTerm +
+                    C.weightMealTimeOfDay * mealTimeOfDayTerm +
+                    C.weightNotExercising * notExercisingTerm +
+                    C.weightSustainedRise * sustainedRiseTerm
             )
         } else {
             rawScore =

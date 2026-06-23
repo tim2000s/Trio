@@ -1,19 +1,12 @@
-// BoostV5Adapter — Trio-side glue between Trio's determine-basal context and the (pure, tested)
-// BoostV5Core engine. Lives in the Trio target so it can read Trio's typed models. Extracts the
-// engine inputs, runs decide(), and (in .active mode) overrides the determination's SMB; in
-// .shadow mode it only annotates the reason. baseInsulinReq = the stock Determination's insulinReq,
-// exactly as AAPS V5 takes Boost-V1's insulinReq — V5 adds no sensitivity logic of its own.
-
 import Foundation
 
 enum BoostV5Adapter {
-
     private static func dbl(_ d: Decimal?) -> Double? { d.map { ($0 as NSDecimalNumber).doubleValue } }
 
     /// Minimum sgv over the last 60 min (mg/dL); high default when no recent data (≈ no recent low).
     private static func recentLowBg(_ glucose: [BloodGlucose], now: Date) -> Double {
         let cutoff = now.addingTimeInterval(-3600)
-        let recent = glucose.filter { $0.dateString >= cutoff }.compactMap { $0.sgv }
+        let recent = glucose.filter { $0.dateString >= cutoff }.compactMap(\.sgv)
         return Double(recent.min() ?? 120)
     }
 
@@ -59,12 +52,12 @@ enum BoostV5Adapter {
             baseInsulinReq: baseInsulinReq,
             roundSmbTo: roundSmbTo,
             enableSmbPreChecks: microBolusAllowed,
-            mlHypoRisk: nil,          // ML scores wired in a later phase
-            mlMealLikely: nil,        // nil → score renormalize path after a few cycles
+            mlHypoRisk: nil, // ML scores wired in a later phase
+            mlMealLikely: nil, // nil → score renormalize path after a few cycles
             recentLowBg: recentLowBg(glucose, now: clock),
             cumulativeRise30min: max(0.0, shortAvg * 6.0),
             hour: Calendar.current.component(.hour, from: clock),
-            exerciseActive: false,    // HealthKit activity wired in a later phase
+            exerciseActive: false, // HealthKit activity wired in a later phase
             inPostExerciseWindow: false,
             fastCarbConfirmEnabled: true
         )
