@@ -93,7 +93,7 @@ struct OpenAPSSwift {
             // shadow logs what V5 would do; active overrides the SMB (units), exactly as AAPS
             // V5-active overrides Boost-V1's SMB. baseInsulinReq = the stock determination's
             // insulinReq — V5 adds no sensitivity logic of its own. ──
-            let boostMode = BoostV5Store.shared.mode
+            let boostMode = preferences.boostMode
             if boostMode != .off,
                var det = rawDetermination,
                let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose)
