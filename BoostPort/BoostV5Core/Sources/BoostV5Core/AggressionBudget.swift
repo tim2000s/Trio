@@ -1,13 +1,3 @@
-// AggressionBudget — V5 dose-sizing budget. Faithful Swift port of AAPS Kotlin
-// openAPSBoostV5/AggressionBudget.kt. Pure logic.
-//
-//   budget = max(0.30 * baseInsulinReq, baseInsulinReq * mlHypoRiskScale * postExScale * sensitivity)
-//
-// Both modifiers are SAFETY REDUCERS (never amplify); a hard 30% floor bounds the downside.
-// baseInsulinReq is the Boost-flavoured oref insulinReq (carries the full sensitivity stack); V5
-// adds no sensitivity logic of its own. Includes the 2026-06-15 corrected hypo-caution direction
-// (higher knob = MORE backoff / LESS insulin).
-
 import Foundation
 
 public enum AggressionBudgetConstants {
@@ -27,7 +17,6 @@ public struct AggressionBudgetResult: Equatable, Sendable {
 }
 
 public enum AggressionBudgetEngine {
-
     public static func aggressionBudget(
         baseInsulinReq: Double,
         mlHypoRisk: Double?,

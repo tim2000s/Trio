@@ -1,12 +1,9 @@
-// BoostV5Store — engine mode selector + cross-cycle V5 state persistence (UserDefaults/JSON).
-// The 3-way mode is the lightweight "plugin like AAPS" selector; default .shadow is dosing-safe.
-
 import Foundation
 
 public enum BoostMode: String, Sendable {
-    case off       // stock Trio only
-    case shadow    // run V5, log what it would do, do NOT change dosing
-    case active    // V5 drives the SMB
+    case off // stock Trio only
+    case shadow // run V5, log what it would do, do NOT change dosing
+    case active // V5 drives the SMB
 }
 
 public final class BoostV5Store {

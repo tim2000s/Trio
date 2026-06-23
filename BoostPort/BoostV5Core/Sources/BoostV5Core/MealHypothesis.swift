@@ -1,12 +1,3 @@
-// MealHypothesis — V5 observe→confirm→commit state machine.
-// Faithful Swift port of AAPS Kotlin openAPSBoostV5/MealHypothesis.kt (Boost V5, what Tim runs).
-// Pure functions, no dependencies — caller threads state across cycles (persist in Core Data).
-//
-// Five states: idle → observing → confirmed → committed → recovering → idle.
-// Includes the 2026-05-15 max-score peak-track (Fix 1), 2026-05-22 eventualBg peak-track (Fix 5),
-// 2026-05-26 single-CONFIRMED-per-session guard (Fix 6), 2026-06-12 multi-phase re-engage (Fix 7),
-// and 2026-06-16 corroborated fast-carb fast-path.
-
 import Foundation
 
 public enum MealHypothesis: String, Codable, Equatable, Sendable {
@@ -61,7 +52,6 @@ public enum MealHypothesisConstants {
 }
 
 public enum MealHypothesisEngine {
-
     /// Single-step transition. Pure; caller threads state across cycles.
     public static func step(
         current: MealHypothesisState,
@@ -92,10 +82,13 @@ public enum MealHypothesisEngine {
             if fastConfirm {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
             } else if score >= C.enterObservingScore {
-                return MealHypothesisState(state: .observing, ageCycles: 0,
-                                           maxScoreInObserving: score,
-                                           maxEventualBgOffsetInObserving: currentOffset,
-                                           committedInSession: false)
+                return MealHypothesisState(
+                    state: .observing,
+                    ageCycles: 0,
+                    maxScoreInObserving: score,
+                    maxEventualBgOffsetInObserving: currentOffset,
+                    committedInSession: false
+                )
             } else {
                 return MealHypothesisState(state: state, ageCycles: age + 1)
             }
@@ -107,17 +100,20 @@ public enum MealHypothesisEngine {
                 newMaxScore >= C.confirmScore &&
                 newMaxOffset >= C.confirmEventualBgOffsetMgdl &&
                 !committedInSession
-            if fastConfirm && !committedInSession {
+            if fastConfirm, !committedInSession {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
             } else if confirmEligible {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
-            } else if score < C.fallBackToIdleScore && age >= C.fallBackToIdleAge {
+            } else if score < C.fallBackToIdleScore, age >= C.fallBackToIdleAge {
                 return MealHypothesisState(state: .idle, ageCycles: 0)
             } else {
-                return MealHypothesisState(state: state, ageCycles: age + 1,
-                                           maxScoreInObserving: newMaxScore,
-                                           maxEventualBgOffsetInObserving: newMaxOffset,
-                                           committedInSession: committedInSession)
+                return MealHypothesisState(
+                    state: state,
+                    ageCycles: age + 1,
+                    maxScoreInObserving: newMaxScore,
+                    maxEventualBgOffsetInObserving: newMaxOffset,
+                    committedInSession: committedInSession
+                )
             }
 
         case .confirmed:
@@ -159,7 +155,8 @@ public enum MealHypothesisEngine {
         timeJumpMinutes: Double = 0.0
     ) -> (MealHypothesisState, Bool) {
         if profileSwitched || pumpDisconnected || loopSuspended ||
-            timeJumpMinutes > MealHypothesisConstants.timeJumpResetMinutes {
+            timeJumpMinutes > MealHypothesisConstants.timeJumpResetMinutes
+        {
             return (MealHypothesisState(state: .idle), true)
         }
         return (current, false)
