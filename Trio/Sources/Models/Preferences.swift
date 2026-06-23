@@ -54,6 +54,12 @@ struct Preferences: JSON, Equatable {
     var threshold_setting: Decimal = 60
     var updateInterval: Decimal = 20
     var boostMode: BoostMode = .off
+    // Boost DynISF (V1) — used to compute a Boost-flavoured ISF in active mode. Defaults match AAPS.
+    var boostUseTdd: Bool = false
+    var boostDynIsfNormalTarget: Decimal = 99
+    var boostDynIsfBgCap: Decimal = 210
+    var boostDynIsfVelocity: Decimal = 100 // percent
+    var boostDynIsfAdjustmentFactor: Decimal = 100 // percent
 }
 
 extension Preferences {
@@ -110,6 +116,11 @@ extension Preferences {
         case threshold_setting
         case updateInterval
         case boostMode
+        case boostUseTdd
+        case boostDynIsfNormalTarget
+        case boostDynIsfBgCap
+        case boostDynIsfVelocity
+        case boostDynIsfAdjustmentFactor
     }
 }
 
@@ -332,6 +343,26 @@ extension Preferences: Decodable {
 
         if let boostMode = try? container.decode(BoostMode.self, forKey: .boostMode) {
             preferences.boostMode = boostMode
+        }
+
+        if let boostUseTdd = try? container.decode(Bool.self, forKey: .boostUseTdd) {
+            preferences.boostUseTdd = boostUseTdd
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfNormalTarget) {
+            preferences.boostDynIsfNormalTarget = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfBgCap) {
+            preferences.boostDynIsfBgCap = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfVelocity) {
+            preferences.boostDynIsfVelocity = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfAdjustmentFactor) {
+            preferences.boostDynIsfAdjustmentFactor = v
         }
 
         self = preferences

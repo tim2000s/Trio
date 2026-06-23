@@ -320,6 +320,7 @@
 		3E54EF2C2E476DA40006F54D /* MedtrumKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E54EF2B2E476DA40006F54D /* MedtrumKit.framework */; };
 		3E54EF2D2E476DA40006F54D /* MedtrumKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3E54EF2B2E476DA40006F54D /* MedtrumKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		3E62C7822F54CC1B00433237 /* BolusDisplayThreshold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E62C7812F54CC1600433237 /* BolusDisplayThreshold.swift */; };
+		3FA0DAB4880EAB9686639E0D /* BoostISF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0842550A7F97F514FF116FCB /* BoostISF.swift */; };
 		41740E936552456AAC0EDAC3 /* SettingsSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3919BBB515547118D684CA2 /* SettingsSearchTests.swift */; };
 		45252C95D220E796FDB3B022 /* ConfigEditorDataFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8A87AA037BD079BA3528BA /* ConfigEditorDataFlow.swift */; };
 		45717281F743594AA9D87191 /* ConfigEditorRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920DDB21E5D0EB813197500D /* ConfigEditorRootView.swift */; };
@@ -979,6 +980,7 @@
 
 /* Begin PBXFileReference section */
 		01A7F8D0DFE6653A973FADD3 /* BoostActivityStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostActivityStore.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostActivityStore.swift; sourceTree = "<group>"; };
+		0842550A7F97F514FF116FCB /* BoostISF.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostISF.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostISF.swift; sourceTree = "<group>"; };
 		110AEDE02C5193D100615CC9 /* BolusIntent.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BolusIntent.swift; sourceTree = "<group>"; };
 		110AEDE12C5193D100615CC9 /* BolusIntentRequest.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BolusIntentRequest.swift; sourceTree = "<group>"; };
 		110AEDE52C51A0AE00615CC9 /* ShortcutsConfigView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ShortcutsConfigView.swift; sourceTree = "<group>"; };
@@ -3119,6 +3121,7 @@
 				C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */,
 				990EDF122666600B079D37AB /* ActivityLoadTracker.swift */,
 				8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */,
+				0842550A7F97F514FF116FCB /* BoostISF.swift */,
 			);
 			name = BoostPort;
 			sourceTree = SOURCE_ROOT;
@@ -5416,6 +5419,7 @@
 				4B4B55F95F14BCCE9AE98F06 /* IsfShadowEma.swift in Sources */,
 				C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */,
 				C0886FDDA1C6418A23A1B383 /* NightMode.swift in Sources */,
+				3FA0DAB4880EAB9686639E0D /* BoostISF.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
