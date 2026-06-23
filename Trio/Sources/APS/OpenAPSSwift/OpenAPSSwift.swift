@@ -98,18 +98,20 @@ struct OpenAPSSwift {
                var det = rawDetermination,
                let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose)
             {
-                let decision = BoostV5Adapter.run(
+                let result = BoostV5Adapter.run(
                     determination: det,
                     glucoseStatus: glucoseStatus,
                     glucose: glucose,
+                    iobData: iob,
                     maxIob: (preferences.maxIOB as NSDecimalNumber).doubleValue,
                     roundSmbTo: 0.05,
                     microBolusAllowed: microBolusAllowed,
+                    mode: boostMode,
                     clock: clock
                 )
-                det.reason += " " + BoostV5Adapter.reasonTag(decision, mode: boostMode)
+                det.reason += " " + result.reason
                 if boostMode == .active {
-                    det.units = Decimal(decision.finalDose)
+                    det.units = Decimal(result.decision.finalDose)
                 }
                 rawDetermination = det
             }
