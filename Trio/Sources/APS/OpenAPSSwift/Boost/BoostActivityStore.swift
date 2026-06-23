@@ -1,22 +1,36 @@
 import Foundation
 
-/// Latest activity reading derived from HealthKit (steps + heart rate), written by
-/// `BoostActivityMonitor` and read at decision time by `BoostV5Adapter`. Decoupled via a
-/// small persisted snapshot so the (synchronous) determine-basal path never blocks on an
-/// async HealthKit query. Shadow-safe: it only informs the V5 exercise modifiers.
+/// Latest activity/sleep reading derived from HealthKit, written by `BoostActivityMonitor`
+/// and read at decision time by `BoostV5Adapter`. Decoupled via a small persisted snapshot
+/// so the (synchronous) determine-basal path never blocks on an async HealthKit query.
+/// Carries the derived V5 context (exercise / post-exercise / asleep) plus the sleep and
+/// post-exercise machine states so the monitor can advance them cycle-to-cycle.
 struct BoostActivitySnapshot: Codable, Sendable {
-    var steps30min: Double // step count over the last 30 minutes
+    var steps30min: Double
     var latestHeartRate: Double // most recent HR sample (bpm), 0 if none
     var restingHeartRate: Double // Apple's resting HR baseline (bpm), 0 if unavailable
-    var exerciseActive: Bool // computed at refresh: elevated steps or HR
-    var lastExerciseAt: Date? // most recent time exercise was detected
+
+    // Derived V5 context
+    var exerciseActive: Bool
+    var inPostExerciseWindow: Bool
+    var asleep: Bool
+    var exerciseState: String // ExerciseState rawValue (telemetry)
+    var profilePercent: Double // would-apply profile % from activity classification
+    var targetBgMgdl: Double? // would-apply activity target (nil = no change)
+
+    var lastExerciseAt: Date?
+
+    // Persisted machine states (advanced by the monitor each refresh)
+    var sleepState: SleepDetectorState?
+    var recoveryState: RecoveryState?
+
     var updatedAt: Date
 }
 
 final class BoostActivityStore: @unchecked Sendable {
     static let shared = BoostActivityStore()
 
-    private let key = "boost_activity_snapshot"
+    private let key = "boost_activity_snapshot_v2"
     private let lock = NSLock()
     private let defaults: UserDefaults
 
@@ -38,14 +52,11 @@ final class BoostActivityStore: @unchecked Sendable {
         }
     }
 
-    /// Derive the V5 exercise flags from the latest snapshot, guarding on freshness.
-    /// `exerciseActive` only counts if the snapshot is recent (≤ 30 min); the post-exercise
-    /// window runs for 2h after the last detected activity.
-    func flags(now: Date) -> (exerciseActive: Bool, inPostExerciseWindow: Bool) {
-        guard let snap = snapshot else { return (false, false) }
-        let fresh = now.timeIntervalSince(snap.updatedAt) <= 1800
-        let active = fresh && snap.exerciseActive
-        let postWindow = !active && (snap.lastExerciseAt.map { now.timeIntervalSince($0) <= 7200 } ?? false)
-        return (active, postWindow)
+    /// V5 context flags for the adapter, guarding on freshness (≤ 30 min). Stale → all false.
+    func flags(now: Date) -> (exerciseActive: Bool, inPostExerciseWindow: Bool, asleep: Bool) {
+        guard let snap = snapshot, now.timeIntervalSince(snap.updatedAt) <= 1800 else {
+            return (false, false, false)
+        }
+        return (snap.exerciseActive, snap.inPostExerciseWindow, snap.asleep)
     }
 }

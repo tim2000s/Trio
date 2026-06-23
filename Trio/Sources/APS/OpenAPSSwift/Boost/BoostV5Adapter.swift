@@ -95,6 +95,7 @@ enum BoostV5Adapter {
             hour: hour,
             exerciseActive: activity.exerciseActive,
             inPostExerciseWindow: activity.inPostExerciseWindow,
+            asleep: activity.asleep,
             fastCarbConfirmEnabled: true
         )
 
@@ -122,13 +123,16 @@ enum BoostV5Adapter {
         mode: BoostMode,
         mlHypoRisk: Double?,
         mlMealLikely: Double?,
-        activity: (exerciseActive: Bool, inPostExerciseWindow: Bool)
+        activity: (exerciseActive: Bool, inPostExerciseWindow: Bool, asleep: Bool)
     ) -> String {
         let st = d.mealHypothesis.rawValue
         let smb = String(format: "%.2f", d.finalDose)
         func fmt(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "n/a" }
         let ml = " ml(hypo=\(fmt(mlHypoRisk)) meal=\(fmt(mlMealLikely)))"
-        let act = activity.exerciseActive ? " exercise" : (activity.inPostExerciseWindow ? " postEx" : "")
-        return "boostV5[\(mode.rawValue)]: state=\(st) score=\(String(format: "%.2f", d.score)) wouldSMB=\(smb)U;\(ml)\(act)"
+        var ctx = ""
+        if activity.exerciseActive { ctx += " exercise" }
+        else if activity.inPostExerciseWindow { ctx += " postEx" }
+        if activity.asleep { ctx += " asleep" }
+        return "boostV5[\(mode.rawValue)]: state=\(st) score=\(String(format: "%.2f", d.score)) wouldSMB=\(smb)U;\(ml)\(ctx)"
     }
 }
