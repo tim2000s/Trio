@@ -1,9 +1,20 @@
 import Foundation
 
-public enum BoostMode: String, Sendable {
+public enum BoostMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case off // stock Trio only
     case shadow // run V5, log what it would do, do NOT change dosing
     case active // V5 drives the SMB
+
+    public var id: String { rawValue }
+
+    /// Human-facing label for the settings picker.
+    public var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .shadow: return "Shadow (log only)"
+        case .active: return "Active (doses)"
+        }
+    }
 }
 
 public final class BoostV5Store {
