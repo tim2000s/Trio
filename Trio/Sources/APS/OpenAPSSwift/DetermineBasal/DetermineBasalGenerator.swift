@@ -170,6 +170,17 @@ enum DeterminationGenerator {
             )
         }
 
+        // Boost active mode: scale basal by the activity profile % (active → lower, inactive →
+        // higher), from the classifier snapshot. AAPS's profileSwitch% also scales the ISF
+        // divisor — TODO; this applies the basal portion. Fresh-guarded (≤30 min).
+        if preferences.boostMode == .active,
+           let activitySnap = BoostActivityStore.shared.snapshot,
+           currentTime.timeIntervalSince(activitySnap.updatedAt) <= 1800,
+           activitySnap.profilePercent != 100
+        {
+            basal = (basal * Decimal(activitySnap.profilePercent) / 100).jsRounded(scale: 3)
+        }
+
         // this is the `sens` variable in JS, it's the adjusted sensitivity.
         // Boost active mode swaps in Boost DynISF here, so eventualBG/predictions/insulinReq
         // (and therefore V5's baseInsulinReq) are all Boost-flavoured. Shadow/off stay stock.
