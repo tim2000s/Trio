@@ -45,6 +45,21 @@ struct FeatureSettingsView: BaseView {
                 }
             )
             .listRowBackground(Color.chart)
+
+            Section(
+                header: Text("Boost (V5)"),
+                footer: Text(
+                    "Off: stock Trio only. Shadow: runs the Boost V5 engine and logs what it would dose (in the determination reason) without changing dosing. Active: Boost V5 drives the SMB."
+                ),
+                content: {
+                    Picker("Boost Mode", selection: $state.boostMode) {
+                        ForEach(BoostMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                }
+            )
+            .listRowBackground(Color.chart)
         }
         .scrollContentBackground(.hidden)
         .background(appState.trioBackgroundColor(for: colorScheme))

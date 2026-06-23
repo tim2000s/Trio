@@ -18,6 +18,7 @@ extension Settings {
         @Published var units: GlucoseUnits = .mgdL
         @Published var closedLoop = false
         @Published var debugOptions = false
+        @Published var boostMode: BoostMode = .off
         @Published var serviceUIType: ServiceUI.Type?
         @Published var setupTidepool = false
 
@@ -31,6 +32,7 @@ extension Settings {
 
             subscribeSetting(\.debugOptions, on: $debugOptions) { debugOptions = $0 }
             subscribeSetting(\.closedLoop, on: $closedLoop) { closedLoop = $0 }
+            subscribePreferencesSetting(\.boostMode, on: $boostMode) { boostMode = $0 }
             broadcaster.register(SettingsObserver.self, observer: self)
 
             buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
