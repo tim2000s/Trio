@@ -10,6 +10,7 @@
 		041D1E995A6AE92E9289DC49 /* TreatmentsDataFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8D1A7CA8C10C4403D4BBFA7 /* TreatmentsDataFlow.swift */; };
 		0437CE46C12535A56504EC19 /* SnoozeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5822B15939E719628E9FF7C /* SnoozeRootView.swift */; };
 		056AFD34828D51861DCA5390 /* BoostV5Engine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2BD1E70AFAF420655084032 /* BoostV5Engine.swift */; };
+		0AC01300FF58A57890DB3DC0 /* BoostActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A7F8D0DFE6653A973FADD3 /* BoostActivityStore.swift */; };
 		0D9A5E34A899219C5C4CDFAF /* HistoryStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9455FA2D92E77A6C4AFED8A3 /* HistoryStateModel.swift */; };
 		0F7A65FBD2CD8D6477ED4539 /* GlucoseNotificationSettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E625985B47742D498CB1681A /* GlucoseNotificationSettingsProvider.swift */; };
 		110AEDE32C5193D200615CC9 /* BolusIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110AEDE02C5193D100615CC9 /* BolusIntent.swift */; };
@@ -853,6 +854,7 @@
 		F90692D3274B9A130037068D /* AppleHealthKitRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90692D2274B9A130037068D /* AppleHealthKitRootView.swift */; };
 		F90692D6274B9A450037068D /* HealthKitStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90692D5274B9A450037068D /* HealthKitStateModel.swift */; };
 		FA630397F76B582C8D8681A7 /* BasalProfileEditorProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42369F66CF91F30624C0B3A6 /* BasalProfileEditorProvider.swift */; };
+		FC3B57A583FB454F9AE10B01 /* BoostActivityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3872270C6F7CAB1172686D16 /* BoostActivityMonitor.swift */; };
 		FE41E4D629463EE20047FD55 /* NightscoutPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE41E4D529463EE20047FD55 /* NightscoutPreferences.swift */; };
 		FE66D16B291F74F8005D6F77 /* Bundle+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE66D16A291F74F8005D6F77 /* Bundle+Extensions.swift */; };
 		FEFFA7A22929FE49007B8193 /* UIDevice+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEFFA7A12929FE49007B8193 /* UIDevice+Extensions.swift */; };
@@ -967,6 +969,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		01A7F8D0DFE6653A973FADD3 /* BoostActivityStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostActivityStore.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostActivityStore.swift; sourceTree = "<group>"; };
 		110AEDE02C5193D100615CC9 /* BolusIntent.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BolusIntent.swift; sourceTree = "<group>"; };
 		110AEDE12C5193D100615CC9 /* BolusIntentRequest.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BolusIntentRequest.swift; sourceTree = "<group>"; };
 		110AEDE52C51A0AE00615CC9 /* ShortcutsConfigView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ShortcutsConfigView.swift; sourceTree = "<group>"; };
@@ -1087,6 +1090,7 @@
 		3870FF4225EC13F40088248F /* BloodGlucose.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BloodGlucose.swift; sourceTree = "<group>"; };
 		3871F39B25ED892B0013ECB5 /* TempTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempTarget.swift; sourceTree = "<group>"; };
 		3871F39E25ED895A0013ECB5 /* Decimal+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Decimal+Extensions.swift"; sourceTree = "<group>"; };
+		3872270C6F7CAB1172686D16 /* BoostActivityMonitor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostActivityMonitor.swift; path = Trio/Sources/Services/HealthKit/BoostActivityMonitor.swift; sourceTree = "<group>"; };
 		3883581B25EE79BB00E024B2 /* TextFieldWithToolBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextFieldWithToolBar.swift; sourceTree = "<group>"; };
 		3883583325EEB38000E024B2 /* PumpSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpSettings.swift; sourceTree = "<group>"; };
 		388358C725EEF6D200E024B2 /* BasalProfileEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BasalProfileEntry.swift; sourceTree = "<group>"; };
@@ -3086,6 +3090,8 @@
 				A96D10C66C351D0825FE7B75 /* BoostV5Adapter.swift */,
 				5E46FCD44DE04A824C7A5FCB /* BoostTreeModel.swift */,
 				CAD96C5592948DEAF68F7FBA /* BoostMLModels.swift */,
+				01A7F8D0DFE6653A973FADD3 /* BoostActivityStore.swift */,
+				3872270C6F7CAB1172686D16 /* BoostActivityMonitor.swift */,
 			);
 			name = BoostPort;
 			sourceTree = SOURCE_ROOT;
@@ -5372,6 +5378,8 @@
 				DBC76E19DB54D4863DB4FC2E /* BoostV5Adapter.swift in Sources */,
 				70669854796975AB08EB9A60 /* BoostTreeModel.swift in Sources */,
 				86408180B283DE5774E4B065 /* BoostMLModels.swift in Sources */,
+				0AC01300FF58A57890DB3DC0 /* BoostActivityStore.swift in Sources */,
+				FC3B57A583FB454F9AE10B01 /* BoostActivityMonitor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
