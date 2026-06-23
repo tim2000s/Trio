@@ -75,7 +75,7 @@ struct OpenAPSSwift {
                 return .failure(DeterminationError.missingInputs)
             }
 
-            let rawDetermination = try DeterminationGenerator.generate(
+            var rawDetermination = try DeterminationGenerator.generate(
                 profile: profile,
                 preferences: preferences,
                 currentTemp: currentTemp,
@@ -88,6 +88,27 @@ struct OpenAPSSwift {
                 trioCustomOrefVariables: trioCustomOrefVariables,
                 currentTime: clock
             )
+
+            // ── Boost V5 second pass (off | shadow | active). Same engine, two wirings:
+            // shadow logs what V5 would do; active overrides the SMB (units), exactly as AAPS
+            // V5-active overrides Boost-V1's SMB. baseInsulinReq = the stock determination's
+            // insulinReq — V5 adds no sensitivity logic of its own. ──
+            let boostMode = BoostV5Store.shared.mode
+            if boostMode != .off, let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose) {
+                let decision = BoostV5Adapter.run(
+                    determination: rawDetermination,
+                    glucoseStatus: glucoseStatus,
+                    glucose: glucose,
+                    maxIob: (preferences.maxIOB as NSDecimalNumber).doubleValue,
+                    roundSmbTo: 0.05,
+                    microBolusAllowed: microBolusAllowed,
+                    clock: clock
+                )
+                rawDetermination.reason += " " + BoostV5Adapter.reasonTag(decision, mode: boostMode)
+                if boostMode == .active {
+                    rawDetermination.units = Decimal(decision.finalDose)
+                }
+            }
 
             return try .success(JSONBridge.to(rawDetermination))
 

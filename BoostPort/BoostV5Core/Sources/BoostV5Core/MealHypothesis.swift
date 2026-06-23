@@ -9,7 +9,7 @@
 
 import Foundation
 
-public enum MealHypothesis: String, Equatable, Sendable {
+public enum MealHypothesis: String, Codable, Equatable, Sendable {
     case idle = "IDLE"
     case observing = "OBSERVING"
     case confirmed = "CONFIRMED"
@@ -17,7 +17,7 @@ public enum MealHypothesis: String, Equatable, Sendable {
     case recovering = "RECOVERING"
 }
 
-public struct MealHypothesisState: Equatable, Sendable {
+public struct MealHypothesisState: Codable, Equatable, Sendable {
     public var state: MealHypothesis
     public var ageCycles: Int
     public var maxScoreInObserving: Double
