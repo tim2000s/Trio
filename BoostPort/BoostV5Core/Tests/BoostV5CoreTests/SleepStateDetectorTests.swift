@@ -6,8 +6,12 @@ final class SleepStateDetectorTests: XCTestCase {
     typealias D = SleepStateDetector
 
     // Night window: 22:00 (1320) → 07:00 (420), preSleepLead 60m → preSleep window [1260, 1320).
+    // `avgHeartRate` > 0 synthesises one FRESH reading at nowMs (so avgHr != nil → drought inert,
+    // matching the legacy HR-path tests); 0 means no HR samples at all (drives the drought path).
+    // Pass `hrReadings` explicitly to drive drought / transmission-resume scenarios directly.
     private func makeInputs(
         avgHeartRate: Double = 60,
+        hrReadings: [SleepHrReading]? = nil,
         restingHeartRate: Double = 60,
         steps15min: Int = 0,
         nowMinuteOfDay: Int,
@@ -16,12 +20,20 @@ final class SleepStateDetectorTests: XCTestCase {
         preSleepLeadMin: Int = 60,
         sleepHysteresisMin: Int = 10,
         wakeHrHysteresisMin: Int = 5,
+        droughtThresholdMin: Int = 30,
+        freshHrWindowMin: Int = 10,
         mlMealLikely: Double? = nil,
         nowMs: Double,
         autoBySleep: Bool = true
     ) -> SleepDetectorInputs {
-        SleepDetectorInputs(
-            avgHeartRate: avgHeartRate,
+        let readings = hrReadings ?? (
+            avgHeartRate > 0
+                ? [SleepHrReading(timestampMs: nowMs, beatsPerMinute: avgHeartRate, durationMs: 1000)]
+                : []
+        )
+        return SleepDetectorInputs(
+            hrReadings: readings,
+            hrWindowMinutes: 5,
             restingHeartRate: restingHeartRate,
             steps15min: steps15min,
             nowMinuteOfDay: nowMinuteOfDay,
@@ -30,6 +42,8 @@ final class SleepStateDetectorTests: XCTestCase {
             preSleepLeadMin: preSleepLeadMin,
             sleepHysteresisMin: sleepHysteresisMin,
             wakeHrHysteresisMin: wakeHrHysteresisMin,
+            droughtThresholdMin: droughtThresholdMin,
+            freshHrWindowMin: freshHrWindowMin,
             mlMealLikely: mlMealLikely,
             nowMs: nowMs,
             autoBySleep: autoBySleep
@@ -106,15 +120,48 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertFalse(D.qualifiesAsSleepCandidate(60.0, sleepCap: 69.0, steps15min: 0, mlMealLikely: 0.30))
     }
 
-    func testNoHrCannotConfirmSleep() {
-        // avgHeartRate 0 → treated as no data → never sleeps even in window with no steps.
+    func testNoHrDroughtSleepsAfterHysteresis() {
+        // No HR samples at all (e.g. no watch) + never saw a fresh sample → fully in drought.
+        // In the night window with low steps, the drought qualifier promotes to SLEEPING after
+        // hysteresis, matching AAPS's batched-HR / sparse-HR behaviour. Entry reason = "drought".
         var state = SleepDetectorState(state: .preSleep, enteredAtMs: 0)
         let t0 = makeInputs(avgHeartRate: 0, steps15min: 0, nowMinuteOfDay: 1380, nowMs: 0)
         state = D.step(t0, state)
-        let t20 = makeInputs(avgHeartRate: 0, steps15min: 0, nowMinuteOfDay: 1380, nowMs: 20 * minute)
-        state = D.step(t20, state)
-        XCTAssertEqual(state.state, .preSleep)
+        XCTAssertEqual(state.sleepCandidateSinceMs, 0)
+        let t10 = makeInputs(avgHeartRate: 0, steps15min: 0, nowMinuteOfDay: 1380, nowMs: 10 * minute)
+        state = D.step(t10, state)
+        XCTAssertEqual(state.state, .sleeping)
+        XCTAssertEqual(state.sleepEntryReason, "drought")
+    }
+
+    func testRecentHrGapDoesNotDroughtSleep() {
+        // A fresh sample 7 min ago: too old for the 5-min average (avgHr == nil) but recent enough
+        // that drought (≥30 min) is NOT established → neither qualifier fires → no sleep.
+        let now = 1_000_000.0
+        let reading = SleepHrReading(timestampMs: now - 7 * minute, beatsPerMinute: 62, durationMs: 1000)
+        var state = SleepDetectorState(state: .preSleep, enteredAtMs: now)
+        let t0 = makeInputs(hrReadings: [reading], steps15min: 0, nowMinuteOfDay: 1380, nowMs: now)
+        state = D.step(t0, state)
         XCTAssertNil(state.sleepCandidateSinceMs)
+        XCTAssertEqual(state.state, .preSleep)
+    }
+
+    func testTransmissionResumeWakeFromDrought() {
+        // Asleep via drought; then a burst of 3 fresh samples arrives after the drought → AWAKE
+        // immediately (no hysteresis), matching AAPS transmission-resume wake.
+        var state = SleepDetectorState(
+            state: .sleeping, enteredAtMs: 0, lastFreshHrSampleMs: 0, sleepEntryReason: "drought"
+        )
+        let now = 2_000_000.0 // well past any drought threshold from lastFresh=0
+        let burst = [
+            SleepHrReading(timestampMs: now - 2 * minute, beatsPerMinute: 70, durationMs: 1000),
+            SleepHrReading(timestampMs: now - 1 * minute, beatsPerMinute: 72, durationMs: 1000),
+            SleepHrReading(timestampMs: now, beatsPerMinute: 74, durationMs: 1000)
+        ]
+        // Still inside the outer window (02:00) so the hard morning exit isn't what wakes it.
+        let inputs = makeInputs(hrReadings: burst, steps15min: 0, nowMinuteOfDay: 120, nowMs: now)
+        state = D.step(inputs, state)
+        XCTAssertEqual(state.state, .awake)
     }
 
     // MARK: SLEEPING → AWAKE on sustained HR + steps
