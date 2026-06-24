@@ -37,6 +37,22 @@ extension Settings {
         @Published var boostV6PreMealEnabled: Bool = false
         @Published var boostV6PreMealTargetMgdl: Decimal = 72
         @Published var boostV6PreMealLeadMin: Decimal = 60
+        @Published var boostActivitySteps5: Decimal = 420
+        @Published var boostActivitySteps15: Decimal = 800
+        @Published var boostActivitySteps30: Decimal = 1200
+        @Published var boostActivitySteps60: Decimal = 1800
+        @Published var boostActivityPct: Decimal = 80
+        @Published var boostInactivitySteps: Decimal = 500
+        @Published var boostInactivityPct: Decimal = 130
+        @Published var boostHrIntegrationEnabled: Bool = false
+        @Published var boostHrMaxBpm: Decimal = 180
+        @Published var boostHrRestingBpm: Decimal = 60
+        @Published var boostHrStressDetection: Bool = false
+        @Published var boostPostExerciseEnabled: Bool = true
+        @Published var boostPostExerciseHours: Decimal = 2
+        @Published var boostPostExerciseTarget: Decimal = 144
+        @Published var boostPostExerciseScale: Decimal = 0.5
+        @Published var boostPostExerciseMinDuration: Decimal = 10
         @Published var serviceUIType: ServiceUI.Type?
         @Published var setupTidepool = false
 
@@ -73,6 +89,25 @@ extension Settings {
             subscribePreferencesSetting(\.boostV6PreMealTargetMgdl, on: $boostV6PreMealTargetMgdl) {
                 boostV6PreMealTargetMgdl = $0 }
             subscribePreferencesSetting(\.boostV6PreMealLeadMin, on: $boostV6PreMealLeadMin) { boostV6PreMealLeadMin = $0 }
+            subscribePreferencesSetting(\.boostActivitySteps5, on: $boostActivitySteps5) { boostActivitySteps5 = $0 }
+            subscribePreferencesSetting(\.boostActivitySteps15, on: $boostActivitySteps15) { boostActivitySteps15 = $0 }
+            subscribePreferencesSetting(\.boostActivitySteps30, on: $boostActivitySteps30) { boostActivitySteps30 = $0 }
+            subscribePreferencesSetting(\.boostActivitySteps60, on: $boostActivitySteps60) { boostActivitySteps60 = $0 }
+            subscribePreferencesSetting(\.boostActivityPct, on: $boostActivityPct) { boostActivityPct = $0 }
+            subscribePreferencesSetting(\.boostInactivitySteps, on: $boostInactivitySteps) { boostInactivitySteps = $0 }
+            subscribePreferencesSetting(\.boostInactivityPct, on: $boostInactivityPct) { boostInactivityPct = $0 }
+            subscribePreferencesSetting(\.boostHrIntegrationEnabled, on: $boostHrIntegrationEnabled) {
+                boostHrIntegrationEnabled = $0 }
+            subscribePreferencesSetting(\.boostHrMaxBpm, on: $boostHrMaxBpm) { boostHrMaxBpm = $0 }
+            subscribePreferencesSetting(\.boostHrRestingBpm, on: $boostHrRestingBpm) { boostHrRestingBpm = $0 }
+            subscribePreferencesSetting(\.boostHrStressDetection, on: $boostHrStressDetection) { boostHrStressDetection = $0 }
+            subscribePreferencesSetting(\.boostPostExerciseEnabled, on: $boostPostExerciseEnabled) {
+                boostPostExerciseEnabled = $0 }
+            subscribePreferencesSetting(\.boostPostExerciseHours, on: $boostPostExerciseHours) { boostPostExerciseHours = $0 }
+            subscribePreferencesSetting(\.boostPostExerciseTarget, on: $boostPostExerciseTarget) { boostPostExerciseTarget = $0 }
+            subscribePreferencesSetting(\.boostPostExerciseScale, on: $boostPostExerciseScale) { boostPostExerciseScale = $0 }
+            subscribePreferencesSetting(\.boostPostExerciseMinDuration, on: $boostPostExerciseMinDuration) {
+                boostPostExerciseMinDuration = $0 }
             broadcaster.register(SettingsObserver.self, observer: self)
 
             buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
