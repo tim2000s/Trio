@@ -123,7 +123,20 @@ struct OpenAPSSwift {
                 det.reason += " " + result.reason
                 if boostMode == .active {
                     det.units = Decimal(result.decision.finalDose)
-                    let night = BoostV5Adapter.nightMode(determination: det, preferences: preferences, clock: clock)
+                    // AAPS night mode compares against the BASE profile target (pre-TT) and
+                    // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).
+                    let baseTarget = (profile.boostBaseTargetMgdl as NSDecimalNumber?)?.doubleValue
+                        ?? (det.current_target as NSDecimalNumber?)?.doubleValue ?? 100
+                    let activeTt: Double? = (profile.temptargetSet ?? false)
+                        ? (profile.minBg as NSDecimalNumber?).map { min(200, max(72, $0.doubleValue)) }
+                        : nil
+                    let night = BoostV5Adapter.nightMode(
+                        determination: det,
+                        preferences: preferences,
+                        baseProfileTargetMgdl: baseTarget,
+                        activeTempTargetMgdl: activeTt,
+                        clock: clock
+                    )
                     if night.suppress {
                         det.units = 0
                         det.reason += " nightMode(SMB suppressed)"

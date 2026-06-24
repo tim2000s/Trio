@@ -69,6 +69,11 @@ struct Profile: Codable {
     var isfProfile: ComputedInsulinSensitivities?
     var bgTargets: ComputedBGTargets?
     var carbRatios: CarbRatios?
+    /// Boost: scheduled profile target (mg/dL) BEFORE any active temp target is applied.
+    /// Set by `ProfileGenerator` from the pre-TT snapshot captured in `Targets.lookup`.
+    /// Used only by the Boost night-mode gates (AAPS compares against the base profile
+    /// target, not the TT-adjusted one). Inert for stock Trio.
+    var boostBaseTargetMgdl: Decimal?
 
     private enum CodingKeys: String, CodingKey {
         case dia
@@ -134,5 +139,6 @@ struct Profile: Codable {
         case isfProfile
         case bgTargets = "bg_targets"
         case carbRatios = "carb_ratios"
+        case boostBaseTargetMgdl = "boost_base_target_mgdl"
     }
 }
