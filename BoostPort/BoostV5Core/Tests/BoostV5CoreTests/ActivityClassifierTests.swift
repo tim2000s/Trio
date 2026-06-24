@@ -165,27 +165,27 @@ final class ActivityClassifierTests: XCTestCase {
         XCTAssertEqual(r.targetBgMgdl, 160)
     }
 
-    func testStressGatedByHrStressDetection() {
-        // Low steps + zone 2 (hr 100). Inactive branch (steps60 = 100 < 500).
-        let stressInputs = ActivityInputs(
+    func testStressIsInertMatchingAAPS() {
+        // STRESS is dead code in AAPS (never reaches activityState / never raises target). The port
+        // mirrors that: even with hrStressDetection ON, low steps + zone 2-3 must NOT classify STRESS.
+        // It falls through identically to the detection-off case (INACTIVE here: steps60 100 < 500).
+        let onInputs = ActivityInputs(
             steps5: 0, steps15: 0, steps30: 0, steps60: 100,
             avgHeartRate: 100, thresholds: hrThresholds(stress: true)
         )
-        let withStress = ActivityClassifier.classify(stressInputs)
-        XCTAssertEqual(withStress.state, .stress)
-        XCTAssertEqual(withStress.profilePercent, 100) // profile unchanged
-        XCTAssertEqual(withStress.targetBgMgdl, 160)
-        XCTAssertTrue(withStress.exerciseActive)
+        let on = ActivityClassifier.classify(onInputs)
+        XCTAssertNotEqual(on.state, .stress)
+        XCTAssertEqual(on.state, .inactive)
+        XCTAssertNil(on.targetBgMgdl) // no 160 target raise
+        XCTAssertFalse(on.exerciseActive)
 
-        // Same inputs but stress detection disabled → falls through to INACTIVE.
-        let noStressInputs = ActivityInputs(
+        let offInputs = ActivityInputs(
             steps5: 0, steps15: 0, steps30: 0, steps60: 100,
             avgHeartRate: 100, thresholds: hrThresholds(stress: false)
         )
-        let withoutStress = ActivityClassifier.classify(noStressInputs)
-        XCTAssertEqual(withoutStress.state, .inactive)
-        XCTAssertEqual(withoutStress.profilePercent, 130)
-        XCTAssertNil(withoutStress.targetBgMgdl)
+        let off = ActivityClassifier.classify(offInputs)
+        XCTAssertEqual(off.state, on.state) // identical with detection on or off
+        XCTAssertEqual(off.profilePercent, 130)
     }
 
     func testHrEnabledButNoHrSignalUsesStepOnly() {

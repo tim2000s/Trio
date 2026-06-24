@@ -276,10 +276,11 @@ public enum ActivityClassifier {
         if lowSteps, zone >= 3, zone <= 4 {
             return .resistance
         }
-        // Stress: low steps + zone 2–3 (opt-in).
-        if t.hrStressDetection, lowSteps, zone >= 2, zone <= 3 {
-            return .stress
-        }
+        // STRESS is intentionally NOT classified — it is dead code in AAPS (the classifier only
+        // ever tags STRESS with LOW confidence, and the plugin gates it behind `confidence != LOW`,
+        // so it never reaches activityState or raises the target). We mirror that: low-steps + zone
+        // 2–3 falls through to resting/inactive, never STRESS. (The `hrStressDetection` toggle is
+        // kept for parity but, like AAPS, has no effect until STRESS is deliberately enabled.)
         // Inactive: low steps + zone 1.
         if lowSteps, zone == 1 {
             return .inactive
@@ -304,12 +305,12 @@ public enum ActivityClassifier {
              .lightAerobic,
              .moderateAerobic,
              .resistance,
-             .stress,
              .vigorousAerobic:
             return true
         case .inactive,
              .normal,
-             .resting:
+             .resting,
+             .stress: // STRESS is inert (AAPS dead code) — never an exercise state
             return false
         }
     }
