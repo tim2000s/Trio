@@ -122,23 +122,7 @@ struct OpenAPSSwift {
                 )
                 det.reason += " " + result.reason
                 if boostMode == .active {
-                    // Per-cycle boost window (AAPS profile.boostActive): inside the window V5 overrides
-                    // the SMB; outside it the override is skipped so the de-aggressed DynISF base dose
-                    // stands (the configurable overnight off-switch). Same inputs the future_sens gate
-                    // in DetermineBasalGenerator uses, so the two stay consistent.
-                    let nowMin = Calendar.current.component(.hour, from: clock) * 60
-                        + Calendar.current.component(.minute, from: clock)
-                    let windowActive = BoostISF.boostWindowActive(
-                        nowMinuteOfDay: nowMin,
-                        temptargetSet: profile.temptargetSet ?? false,
-                        targetMgdl: (det.current_target as NSDecimalNumber?)?.doubleValue ?? 100,
-                        preferences: preferences
-                    )
-                    if windowActive {
-                        det.units = Decimal(result.decision.finalDose)
-                    } else {
-                        det.reason += " boostWindow(paused: outside active window, SMB override off);"
-                    }
+                    det.units = Decimal(result.decision.finalDose)
                     // AAPS night mode compares against the BASE profile target (pre-TT) and
                     // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).
                     let baseTarget = (profile.boostBaseTargetMgdl as NSDecimalNumber?)?.doubleValue

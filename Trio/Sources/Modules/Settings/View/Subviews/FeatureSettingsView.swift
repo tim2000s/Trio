@@ -88,21 +88,6 @@ struct FeatureSettingsView: BaseView {
                 .listRowBackground(Color.chart)
 
                 Section(
-                    header: Text("Boost Active Window"),
-                    footer: Text(
-                        "Optional overnight off-switch (Active mode). When enabled, Boost's aggressive dosing (SMB override + accelerated dosing-ISF) only applies inside the window; outside it, dosing falls back to the de-aggressed Dynamic ISF base. Allow with high TT keeps Boost on when a temp target above the normal target is set."
-                    )
-                ) {
-                    Toggle("Enabled", isOn: $state.boostWindowEnabled)
-                    if state.boostWindowEnabled {
-                        boostSlider("Start hour", $state.boostWindowStartHour, in: 0 ... 23, step: 1)
-                        boostSlider("End hour", $state.boostWindowEndHour, in: 0 ... 23, step: 1)
-                        Toggle("Allow with high TT", isOn: $state.boostAllowWithHighTt)
-                    }
-                }
-                .listRowBackground(Color.chart)
-
-                Section(
                     header: Text("Boost Night Mode"),
                     footer: Text(
                         "Suppresses SMB overnight (Active mode). Disable-with-COB/low-TT and auto-by-sleep optionally gate it."
