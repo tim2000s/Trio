@@ -80,6 +80,23 @@ struct Preferences: JSON, Equatable {
     var boostV6PreMealEnabled: Bool = false
     var boostV6PreMealTargetMgdl: Decimal = 72
     var boostV6PreMealLeadMin: Decimal = 60
+    // Activity / HR / post-exercise (feed BoostActivityMonitor). Defaults match AAPS.
+    var boostActivitySteps5: Decimal = 420
+    var boostActivitySteps15: Decimal = 800
+    var boostActivitySteps30: Decimal = 1200
+    var boostActivitySteps60: Decimal = 1800
+    var boostActivityPct: Decimal = 80
+    var boostInactivitySteps: Decimal = 500
+    var boostInactivityPct: Decimal = 130
+    var boostHrIntegrationEnabled: Bool = false
+    var boostHrMaxBpm: Decimal = 180
+    var boostHrRestingBpm: Decimal = 60
+    var boostHrStressDetection: Bool = false
+    var boostPostExerciseEnabled: Bool = true
+    var boostPostExerciseHours: Decimal = 2
+    var boostPostExerciseTarget: Decimal = 144
+    var boostPostExerciseScale: Decimal = 0.5
+    var boostPostExerciseMinDuration: Decimal = 10
 }
 
 extension Preferences {
@@ -158,6 +175,22 @@ extension Preferences {
         case boostV6PreMealEnabled
         case boostV6PreMealTargetMgdl
         case boostV6PreMealLeadMin
+        case boostActivitySteps5
+        case boostActivitySteps15
+        case boostActivitySteps30
+        case boostActivitySteps60
+        case boostActivityPct
+        case boostInactivitySteps
+        case boostInactivityPct
+        case boostHrIntegrationEnabled
+        case boostHrMaxBpm
+        case boostHrRestingBpm
+        case boostHrStressDetection
+        case boostPostExerciseEnabled
+        case boostPostExerciseHours
+        case boostPostExerciseTarget
+        case boostPostExerciseScale
+        case boostPostExerciseMinDuration
     }
 }
 
@@ -460,6 +493,26 @@ extension Preferences: Decodable {
         if let v = try? container.decode(Decimal.self, forKey: .boostV6PreMealLeadMin) {
             preferences.boostV6PreMealLeadMin = v
         }
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps5) { preferences.boostActivitySteps5 = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps15) { preferences.boostActivitySteps15 = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps30) { preferences.boostActivitySteps30 = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps60) { preferences.boostActivitySteps60 = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivityPct) { preferences.boostActivityPct = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostInactivitySteps) { preferences.boostInactivitySteps = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostInactivityPct) { preferences.boostInactivityPct = v }
+        if let v = try? container
+            .decode(Bool.self, forKey: .boostHrIntegrationEnabled) { preferences.boostHrIntegrationEnabled = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostHrMaxBpm) { preferences.boostHrMaxBpm = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostHrRestingBpm) { preferences.boostHrRestingBpm = v }
+        if let v = try? container.decode(Bool.self, forKey: .boostHrStressDetection) { preferences.boostHrStressDetection = v }
+        if let v = try? container
+            .decode(Bool.self, forKey: .boostPostExerciseEnabled) { preferences.boostPostExerciseEnabled = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostPostExerciseHours) { preferences.boostPostExerciseHours = v }
+        if let v = try? container
+            .decode(Decimal.self, forKey: .boostPostExerciseTarget) { preferences.boostPostExerciseTarget = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostPostExerciseScale) { preferences.boostPostExerciseScale = v }
+        if let v = try? container
+            .decode(Decimal.self, forKey: .boostPostExerciseMinDuration) { preferences.boostPostExerciseMinDuration = v }
 
         self = preferences
     }
