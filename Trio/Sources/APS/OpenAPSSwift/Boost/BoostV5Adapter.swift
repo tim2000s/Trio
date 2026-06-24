@@ -117,6 +117,10 @@ enum BoostV5Adapter {
 
         let decision = BoostV5Engine.decide(inputs, persisted: store.loadState())
         store.saveState(decision.newPersistedState)
+        // V6 learning: record a fresh CONFIRMED commit (meal-time history → pre-meal target).
+        if decision.mealHypothesis == .confirmed, decision.mealHypothesisAge == 0 {
+            BoostMealTimeStore.shared.recordConfirmed(at: clock)
+        }
         let reason = reasonTag(
             decision,
             mode: mode,
@@ -131,6 +135,40 @@ enum BoostV5Adapter {
     struct Result {
         let decision: V5Decision
         let reason: String
+    }
+
+    /// Night-mode evaluation: suppresses SMB overnight (AAPS night mode). Uses the
+    /// determination's bg/target/cob + the monitor's asleep flag + the user's config.
+    /// Returns whether to suppress and a short reason tag.
+    static func nightMode(
+        determination: Determination,
+        preferences: Preferences,
+        clock: Date
+    ) -> (suppress: Bool, reason: String) {
+        guard preferences.boostNightModeEnabled else { return (false, "") }
+        let asleep = BoostActivityStore.shared.snapshot
+            .map { clock.timeIntervalSince($0.updatedAt) <= 1800 && $0.asleep } ?? false
+        let config = NightModeConfig(
+            enabled: true,
+            startMinute: Int((dbl(preferences.boostNightModeStartHour) ?? 22) * 60),
+            endMinute: Int((dbl(preferences.boostNightModeEndHour) ?? 7) * 60),
+            bgOffsetMgdl: dbl(preferences.boostNightModeBgOffset) ?? 27,
+            disableWithCob: preferences.boostNightModeDisableWithCob,
+            disableWithLowTt: preferences.boostNightModeDisableWithLowTt,
+            autoBySleep: preferences.boostNightModeAutoBySleep
+        )
+        let nowMin = Calendar.current.component(.hour, from: clock) * 60
+            + Calendar.current.component(.minute, from: clock)
+        let result = NightMode.evaluate(NightModeInputs(
+            nowMinuteOfDay: nowMin,
+            bg: dbl(determination.bg) ?? 0,
+            profileTargetMgdl: dbl(determination.current_target) ?? 100,
+            cob: dbl(determination.cob) ?? 0,
+            activeTempTargetMgdl: nil,
+            sleepActive: asleep,
+            config: config
+        ))
+        return (result.suppressSmb, result.reason)
     }
 
     /// Compact telemetry string appended to the determination reason (shadow + active).

@@ -81,6 +81,38 @@ struct FeatureSettingsView: BaseView {
                     Toggle("Circadian ISF", isOn: $state.boostEnableCircadianIsf)
                 }
                 .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost Night Mode"),
+                    footer: Text(
+                        "Suppresses SMB overnight (Active mode). Disable-with-COB/low-TT and auto-by-sleep optionally gate it."
+                    )
+                ) {
+                    Toggle("Enabled", isOn: $state.boostNightModeEnabled)
+                    if state.boostNightModeEnabled {
+                        boostSlider("Start hour", $state.boostNightModeStartHour, in: 0 ... 23, step: 1)
+                        boostSlider("End hour", $state.boostNightModeEndHour, in: 0 ... 23, step: 1)
+                        boostSlider("BG offset (mg/dL)", $state.boostNightModeBgOffset, in: 0 ... 90, step: 1)
+                        Toggle("Disable with COB", isOn: $state.boostNightModeDisableWithCob)
+                        Toggle("Disable with low TT", isOn: $state.boostNightModeDisableWithLowTt)
+                        Toggle("Auto by sleep", isOn: $state.boostNightModeAutoBySleep)
+                    }
+                }
+                .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost V6 Pre-Meal"),
+                    footer: Text(
+                        "Active mode: fires an anticipatory low target before learned meal times so insulin rises before carbs land (lower-only; suppressed during exercise)."
+                    )
+                ) {
+                    Toggle("Enabled", isOn: $state.boostV6PreMealEnabled)
+                    if state.boostV6PreMealEnabled {
+                        boostSlider("Pre-meal target (mg/dL)", $state.boostV6PreMealTargetMgdl, in: 65 ... 90, step: 1)
+                        boostSlider("Lead time (min)", $state.boostV6PreMealLeadMin, in: 30 ... 90, step: 5)
+                    }
+                }
+                .listRowBackground(Color.chart)
             }
         }
         .scrollContentBackground(.hidden)

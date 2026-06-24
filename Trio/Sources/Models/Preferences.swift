@@ -68,6 +68,18 @@ struct Preferences: JSON, Equatable {
     var boostV5ConfirmedCapU: Decimal = 1.0 // 0…5 U
     var boostV5CommittedCapU: Decimal = 0.25 // 0…1 U
     var boostV5FastCarbConfirm: Bool = true
+    // Night mode (suppresses SMB overnight). Defaults match AAPS.
+    var boostNightModeEnabled: Bool = false
+    var boostNightModeStartHour: Decimal = 22
+    var boostNightModeEndHour: Decimal = 7
+    var boostNightModeBgOffset: Decimal = 27 // mg/dL
+    var boostNightModeDisableWithCob: Bool = false
+    var boostNightModeDisableWithLowTt: Bool = false
+    var boostNightModeAutoBySleep: Bool = false
+    // V6 anticipatory pre-meal target.
+    var boostV6PreMealEnabled: Bool = false
+    var boostV6PreMealTargetMgdl: Decimal = 72
+    var boostV6PreMealLeadMin: Decimal = 60
 }
 
 extension Preferences {
@@ -136,6 +148,16 @@ extension Preferences {
         case boostV5ConfirmedCapU
         case boostV5CommittedCapU
         case boostV5FastCarbConfirm
+        case boostNightModeEnabled
+        case boostNightModeStartHour
+        case boostNightModeEndHour
+        case boostNightModeBgOffset
+        case boostNightModeDisableWithCob
+        case boostNightModeDisableWithLowTt
+        case boostNightModeAutoBySleep
+        case boostV6PreMealEnabled
+        case boostV6PreMealTargetMgdl
+        case boostV6PreMealLeadMin
     }
 }
 
@@ -406,6 +428,37 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {
             preferences.boostV5FastCarbConfirm = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostNightModeEnabled) {
+            preferences.boostNightModeEnabled = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostNightModeStartHour) {
+            preferences.boostNightModeStartHour = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostNightModeEndHour) {
+            preferences.boostNightModeEndHour = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostNightModeBgOffset) {
+            preferences.boostNightModeBgOffset = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostNightModeDisableWithCob) {
+            preferences.boostNightModeDisableWithCob = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostNightModeDisableWithLowTt) {
+            preferences.boostNightModeDisableWithLowTt = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostNightModeAutoBySleep) {
+            preferences.boostNightModeAutoBySleep = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostV6PreMealEnabled) {
+            preferences.boostV6PreMealEnabled = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostV6PreMealTargetMgdl) {
+            preferences.boostV6PreMealTargetMgdl = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostV6PreMealLeadMin) {
+            preferences.boostV6PreMealLeadMin = v
         }
 
         self = preferences

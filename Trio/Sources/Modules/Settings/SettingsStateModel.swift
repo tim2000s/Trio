@@ -27,6 +27,16 @@ extension Settings {
         @Published var boostV5FastCarbConfirm: Bool = true
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
+        @Published var boostNightModeEnabled: Bool = false
+        @Published var boostNightModeStartHour: Decimal = 22
+        @Published var boostNightModeEndHour: Decimal = 7
+        @Published var boostNightModeBgOffset: Decimal = 27
+        @Published var boostNightModeDisableWithCob: Bool = false
+        @Published var boostNightModeDisableWithLowTt: Bool = false
+        @Published var boostNightModeAutoBySleep: Bool = false
+        @Published var boostV6PreMealEnabled: Bool = false
+        @Published var boostV6PreMealTargetMgdl: Decimal = 72
+        @Published var boostV6PreMealLeadMin: Decimal = 60
         @Published var serviceUIType: ServiceUI.Type?
         @Published var setupTidepool = false
 
@@ -49,6 +59,20 @@ extension Settings {
             subscribePreferencesSetting(\.boostV5FastCarbConfirm, on: $boostV5FastCarbConfirm) { boostV5FastCarbConfirm = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
+            subscribePreferencesSetting(\.boostNightModeEnabled, on: $boostNightModeEnabled) { boostNightModeEnabled = $0 }
+            subscribePreferencesSetting(\.boostNightModeStartHour, on: $boostNightModeStartHour) { boostNightModeStartHour = $0 }
+            subscribePreferencesSetting(\.boostNightModeEndHour, on: $boostNightModeEndHour) { boostNightModeEndHour = $0 }
+            subscribePreferencesSetting(\.boostNightModeBgOffset, on: $boostNightModeBgOffset) { boostNightModeBgOffset = $0 }
+            subscribePreferencesSetting(\.boostNightModeDisableWithCob, on: $boostNightModeDisableWithCob) {
+                boostNightModeDisableWithCob = $0 }
+            subscribePreferencesSetting(\.boostNightModeDisableWithLowTt, on: $boostNightModeDisableWithLowTt) {
+                boostNightModeDisableWithLowTt = $0 }
+            subscribePreferencesSetting(\.boostNightModeAutoBySleep, on: $boostNightModeAutoBySleep) {
+                boostNightModeAutoBySleep = $0 }
+            subscribePreferencesSetting(\.boostV6PreMealEnabled, on: $boostV6PreMealEnabled) { boostV6PreMealEnabled = $0 }
+            subscribePreferencesSetting(\.boostV6PreMealTargetMgdl, on: $boostV6PreMealTargetMgdl) {
+                boostV6PreMealTargetMgdl = $0 }
+            subscribePreferencesSetting(\.boostV6PreMealLeadMin, on: $boostV6PreMealLeadMin) { boostV6PreMealLeadMin = $0 }
             broadcaster.register(SettingsObserver.self, observer: self)
 
             buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
