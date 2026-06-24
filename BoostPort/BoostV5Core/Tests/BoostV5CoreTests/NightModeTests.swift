@@ -146,8 +146,10 @@ final class NightModeTests: XCTestCase {
 
     // MARK: minuteInWindow edge cases
 
-    func testEmptyWindowWhenStartEqualsEnd() {
-        XCTAssertFalse(NightMode.minuteInWindow(now: 100, start: 100, end: 100))
-        XCTAssertFalse(NightMode.minuteInWindow(now: 0, start: 100, end: 100))
+    func testStartEqualsEndIsAlwaysInWindow() {
+        // AAPS takes the wrap branch for start==end → full 24h coverage (always in window).
+        XCTAssertTrue(NightMode.minuteInWindow(now: 100, start: 100, end: 100))
+        XCTAssertTrue(NightMode.minuteInWindow(now: 0, start: 100, end: 100))
+        XCTAssertTrue(NightMode.minuteInWindow(now: 720, start: 100, end: 100))
     }
 }
