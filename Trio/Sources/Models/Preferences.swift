@@ -61,14 +61,6 @@ struct Preferences: JSON, Equatable {
     var boostDynIsfVelocity: Decimal = 100 // percent
     var boostDynIsfAdjustmentFactor: Decimal = 100 // percent
     var boostEnableCircadianIsf: Bool = false
-    // Boost active window (AAPS boost_start/end_time). Opt-in overnight off-switch: when enabled,
-    // Boost's aggressive dosing (V5 SMB override + future_sens conditions 1&2) only applies inside
-    // [start, end) (midnight-wrap); outside it, dosing falls back to the de-aggressed DynISF base.
-    // Disabled by default → Boost runs whenever the mode is active (legacy behaviour).
-    var boostWindowEnabled: Bool = false
-    var boostWindowStartHour: Decimal = 7
-    var boostWindowEndHour: Decimal = 23
-    var boostAllowWithHighTt: Bool = false // AAPS ApsBoostAllowWithHighTt
     // V5 tuning knobs (ranges match AAPS).
     var boostV5Aggression: Decimal = 1.0 // 0.7…1.3 — scales CONFIRMED dose
     var boostV5HypoCaution: Decimal = 1.0 // 1.0…2.0 — deepens ML hypo damping
@@ -167,10 +159,6 @@ extension Preferences {
         case boostDynIsfVelocity
         case boostDynIsfAdjustmentFactor
         case boostEnableCircadianIsf
-        case boostWindowEnabled
-        case boostWindowStartHour
-        case boostWindowEndHour
-        case boostAllowWithHighTt
         case boostV5Aggression
         case boostV5HypoCaution
         case boostV5Sensitivity
@@ -449,22 +437,6 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostEnableCircadianIsf) {
             preferences.boostEnableCircadianIsf = v
-        }
-
-        if let v = try? container.decode(Bool.self, forKey: .boostWindowEnabled) {
-            preferences.boostWindowEnabled = v
-        }
-
-        if let v = try? container.decode(Decimal.self, forKey: .boostWindowStartHour) {
-            preferences.boostWindowStartHour = v
-        }
-
-        if let v = try? container.decode(Decimal.self, forKey: .boostWindowEndHour) {
-            preferences.boostWindowEndHour = v
-        }
-
-        if let v = try? container.decode(Bool.self, forKey: .boostAllowWithHighTt) {
-            preferences.boostAllowWithHighTt = v
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5Aggression) {
