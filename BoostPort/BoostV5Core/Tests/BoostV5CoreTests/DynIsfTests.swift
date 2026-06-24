@@ -5,6 +5,90 @@ import XCTest
 final class DynIsfTests: XCTestCase {
     private let acc = 1E-6
 
+    // MARK: - deltaAccl (AAPS guard + round)
+
+    func testDeltaAcclGuardZeroShortAvg() {
+        // |shortAvg| <= 0.001 → 0.0 (not 50·delta from the /max(|short|,2) floor).
+        XCTAssertEqual(DynIsf.deltaAccl(delta: 6.0, shortAvgDelta: 0.0), 0.0, accuracy: acc)
+        XCTAssertEqual(DynIsf.deltaAccl(delta: 6.0, shortAvgDelta: 0.0005), 0.0, accuracy: acc)
+    }
+
+    func testDeltaAcclNormalAndRound() {
+        // shortAvg 4 → denom max(4,2)=4 → 100*(6-4)/4 = 50.0
+        XCTAssertEqual(DynIsf.deltaAccl(delta: 6.0, shortAvgDelta: 4.0), 50.0, accuracy: acc)
+        // small shortAvg uses the 2.0 floor: shortAvg 1 → denom 2 → 100*(2-1)/2 = 50.0
+        XCTAssertEqual(DynIsf.deltaAccl(delta: 2.0, shortAvgDelta: 1.0), 50.0, accuracy: acc)
+        // rounding to 2dp: shortAvg 3 → 100*(4-3)/3 = 33.333… → 33.33
+        XCTAssertEqual(DynIsf.deltaAccl(delta: 4.0, shortAvgDelta: 3.0), 33.33, accuracy: acc)
+    }
+
+    // MARK: - futureSens (dosing ISF branch selection)
+
+    private func fsArgs(
+        currentBg: Double, eventualBg: Double, minPredBg: Double,
+        delta: Double, shortAvg: Double, longAvg: Double, deltaAccl: Double, cob: Double
+    ) -> Double {
+        DynIsf.futureSens(
+            currentBg: currentBg, eventualBg: eventualBg, minPredBg: minPredBg,
+            delta: delta, shortAvgDelta: shortAvg, longAvgDelta: longAvg, deltaAccl: deltaAccl,
+            cob: cob, sensNormalTarget: 50.0, normalTarget: 99.0, insulinDivisor: 55.0,
+            velocity: 1.0, bgCap: 210.0
+        )
+    }
+
+    private func isfAt(_ bg: Double) -> Double {
+        let v = DynIsf.getIsfByProfile(
+            bg: bg, normalTarget: 99.0, insulinDivisor: 55.0,
+            sensNormalTarget: 50.0, velocity: 1.0, bgCap: 210.0, useCap: false
+        )
+        return (v * 10).rounded() / 10
+    }
+
+    func testFutureSensCobBranch() {
+        // cob>0 && deltaAccl>0 → ISF at 0.75·fsensBg + 0.25·sensBg (no cap → fsensBg=eventual, sensBg=current)
+        let result = fsArgs(
+            currentBg: 120,
+            eventualBg: 160,
+            minPredBg: 110,
+            delta: 3,
+            shortAvg: 2,
+            longAvg: 1,
+            deltaAccl: 5,
+            cob: 20
+        )
+        XCTAssertEqual(result, isfAt(160 * 0.75 + 120 * 0.25), accuracy: 0.05)
+    }
+
+    func testFutureSensRisingBranchUsesCurrent() {
+        // no cob, not rapid, not flat-high, (delta>0 && accl>1) → ISF at sensBg (=current 120)
+        let result = fsArgs(
+            currentBg: 120,
+            eventualBg: 110,
+            minPredBg: 100,
+            delta: 2,
+            shortAvg: 2,
+            longAvg: 1,
+            deltaAccl: 2,
+            cob: 0
+        )
+        XCTAssertEqual(result, isfAt(120), accuracy: 0.05)
+    }
+
+    func testFutureSensFallingBranchUsesMinPred() {
+        // falling: not rising, eventual<=current → ISF at max(minPredBg,1) (=90)
+        let result = fsArgs(
+            currentBg: 120,
+            eventualBg: 100,
+            minPredBg: 90,
+            delta: -2,
+            shortAvg: -2,
+            longAvg: -1,
+            deltaAccl: -3,
+            cob: 0
+        )
+        XCTAssertEqual(result, isfAt(90), accuracy: 0.05)
+    }
+
     // MARK: - blendedTdd
 
     func testBlendedTddStandardBlend() {

@@ -126,6 +126,61 @@ public enum DynIsf {
         return sensNormalTarget * (1.0 - (1.0 - scaler) * velocity)
     }
 
+    // MARK: - delta acceleration
+
+    /// `delta_accl` exactly as AAPS DetermineBasalBoost (~269): guarded so a near-zero shortAvgDelta
+    /// yields 0 (not a spurious 50·delta from the /max(|short|,2) floor), then rounded to 2 dp.
+    public static func deltaAccl(delta: Double, shortAvgDelta: Double) -> Double {
+        guard abs(shortAvgDelta) > 0.001 else { return 0.0 }
+        let raw = 100.0 * (delta - shortAvgDelta) / max(abs(shortAvgDelta), 2.0)
+        return (raw * 100.0).rounded() / 100.0
+    }
+
+    // MARK: - Dosing sensitivity (future_sens)
+
+    /// Boost `future_sens` (DetermineBasalBoost ~750-787): the BG-context-weighted dosing ISF.
+    /// `sensBg` = current BG soft-capped /3, `fsensBg` = eventual BG soft-capped /2; the blend BG is
+    /// chosen by condition, then ISF = getIsfByProfile(blend, useCap:false), rounded to 0.1.
+    public static func futureSens(
+        currentBg: Double,
+        eventualBg: Double,
+        minPredBg: Double,
+        delta: Double,
+        shortAvgDelta: Double,
+        longAvgDelta: Double,
+        deltaAccl: Double,
+        cob: Double,
+        sensNormalTarget: Double,
+        normalTarget: Double,
+        insulinDivisor: Double,
+        velocity: Double,
+        bgCap: Double
+    ) -> Double {
+        let sensBg = currentBg > bgCap ? bgCap + (currentBg - bgCap) / 3.0 : currentBg
+        let fsensBg = eventualBg > bgCap ? bgCap + (eventualBg - bgCap) / 2.0 : eventualBg
+
+        func isf(_ bg: Double) -> Double {
+            getIsfByProfile(
+                bg: bg, normalTarget: normalTarget, insulinDivisor: insulinDivisor,
+                sensNormalTarget: sensNormalTarget, velocity: velocity, bgCap: bgCap, useCap: false
+            )
+        }
+
+        let value: Double
+        if cob > 0, deltaAccl > 0 {
+            value = isf(fsensBg * 0.75 + sensBg * 0.25)
+        } else if delta > 4, deltaAccl > 10, currentBg < 180, eventualBg > currentBg {
+            value = isf(fsensBg * 0.5 + sensBg * 0.5)
+        } else if currentBg > 180, abs(delta) < 2, abs(shortAvgDelta) < 2, abs(longAvgDelta) < 2 {
+            value = isf(minPredBg * 0.25 + sensBg * 0.75)
+        } else if (delta > 0 && deltaAccl > 1) || eventualBg > currentBg {
+            value = isf(sensBg)
+        } else {
+            value = isf(max(minPredBg, 1.0))
+        }
+        return (value * 10.0).rounded() / 10.0
+    }
+
     // MARK: - Sensitivity ratio selection
 
     /// Which sensitivity-ratio path `calculateBoostIsf` takes.
