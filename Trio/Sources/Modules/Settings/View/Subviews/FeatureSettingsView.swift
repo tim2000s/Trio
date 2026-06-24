@@ -113,6 +113,51 @@ struct FeatureSettingsView: BaseView {
                     }
                 }
                 .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost Exercise — Steps"),
+                    footer: Text(
+                        "Step thresholds (per window) that flag activity, and the profile % applied when active / inactive."
+                    )
+                ) {
+                    boostSlider("Active steps / 5 min", $state.boostActivitySteps5, in: 0 ... 2000, step: 10)
+                    boostSlider("Active steps / 15 min", $state.boostActivitySteps15, in: 0 ... 4000, step: 25)
+                    boostSlider("Active steps / 30 min", $state.boostActivitySteps30, in: 0 ... 6000, step: 50)
+                    boostSlider("Active steps / 60 min", $state.boostActivitySteps60, in: 0 ... 10000, step: 50)
+                    boostSlider("Activity profile %", $state.boostActivityPct, in: 30 ... 150, step: 5)
+                    boostSlider("Inactive steps / 60 min", $state.boostInactivitySteps, in: 0 ... 1000, step: 25)
+                    boostSlider("Inactivity profile %", $state.boostInactivityPct, in: 100 ... 200, step: 5)
+                }
+                .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost Exercise — Heart Rate"),
+                    footer: Text(
+                        "When enabled, heart-rate zones refine activity classification (aerobic vs resistance vs stress)."
+                    )
+                ) {
+                    Toggle("HR integration", isOn: $state.boostHrIntegrationEnabled)
+                    if state.boostHrIntegrationEnabled {
+                        boostSlider("Max HR (bpm)", $state.boostHrMaxBpm, in: 150 ... 220, step: 1)
+                        boostSlider("Resting HR (bpm)", $state.boostHrRestingBpm, in: 30 ... 100, step: 1)
+                        Toggle("Stress detection", isOn: $state.boostHrStressDetection)
+                    }
+                }
+                .listRowBackground(Color.chart)
+
+                Section(
+                    header: Text("Boost Post-Exercise"),
+                    footer: Text("After exercise, eases dosing for a recovery window (Active mode).")
+                ) {
+                    Toggle("Enabled", isOn: $state.boostPostExerciseEnabled)
+                    if state.boostPostExerciseEnabled {
+                        boostSlider("Recovery window (h)", $state.boostPostExerciseHours, in: 0.5 ... 8, step: 0.5)
+                        boostSlider("Recovery target (mg/dL)", $state.boostPostExerciseTarget, in: 90 ... 200, step: 1)
+                        boostSlider("SMB scale", $state.boostPostExerciseScale, in: 0 ... 1, step: 0.05)
+                        boostSlider("Min duration (min)", $state.boostPostExerciseMinDuration, in: 1 ... 120, step: 1)
+                    }
+                }
+                .listRowBackground(Color.chart)
             }
         }
         .scrollContentBackground(.hidden)

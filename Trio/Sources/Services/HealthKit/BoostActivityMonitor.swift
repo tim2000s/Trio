@@ -18,6 +18,7 @@ protocol BoostActivityMonitor {
 
 final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
     @Injected() private var healthKitStore: HKHealthStore!
+    @Injected() private var storage: FileStorage!
 
     private var observers: [HKObserverQuery] = []
 
@@ -26,9 +27,7 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
     private var restingHRType: HKQuantityType? { HKObjectType.quantityType(forIdentifier: .restingHeartRate) }
     private var bpmUnit: HKUnit { HKUnit.count().unitDivided(by: .minute()) }
 
-    // Night window (AAPS defaults) until settings land: 22:00–07:00.
-    private let nightStartMinute = 22 * 60
-    private let nightEndMinute = 7 * 60
+    private func d(_ v: Decimal) -> Double { (v as NSDecimalNumber).doubleValue }
 
     init(resolver: Resolver) {
         injectServices(resolver)
@@ -74,43 +73,64 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         let restingForCalc = restingHr > 0 ? restingHr : 60
 
         let prev = BoostActivityStore.shared.snapshot
+        let prefs = storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self) ?? Preferences()
 
-        // 1) Activity classification (step-only by default; HR fusion off until that setting lands).
-        var thresholds = ActivityThresholds()
-        thresholds.hrRestingBpm = Int(restingForCalc)
+        // 1) Activity classification — thresholds from user settings.
+        // Prefer the measured HealthKit resting HR; fall back to the configured value.
+        let resting = restingHr > 0 ? restingHr : d(prefs.boostHrRestingBpm)
+        _ = restingForCalc
+        let thresholds = ActivityThresholds(
+            steps5: Int(d(prefs.boostActivitySteps5)),
+            steps15: Int(d(prefs.boostActivitySteps15)),
+            steps30: Int(d(prefs.boostActivitySteps30)),
+            steps60: Int(d(prefs.boostActivitySteps60)),
+            activityPct: d(prefs.boostActivityPct),
+            inactivitySteps: Int(d(prefs.boostInactivitySteps)),
+            inactivityPct: d(prefs.boostInactivityPct),
+            hrMaxBpm: Int(d(prefs.boostHrMaxBpm)),
+            hrRestingBpm: Int(resting),
+            hrStressDetection: prefs.boostHrStressDetection,
+            hrIntegrationEnabled: prefs.boostHrIntegrationEnabled
+        )
         let activity = ActivityClassifier.classify(ActivityInputs(
             steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
             avgHeartRate: avgHr, thresholds: thresholds
         ))
 
-        // 2) Sleep state machine (autoBySleep on; thresholds = AAPS defaults).
+        // 2) Sleep state machine — night window + auto-by-sleep from settings.
         let nowMinute = Calendar.current.component(.hour, from: now) * 60
             + Calendar.current.component(.minute, from: now)
         let sleep = SleepStateDetector.step(
             SleepDetectorInputs(
                 avgHeartRate: avgHr,
-                restingHeartRate: restingForCalc,
+                restingHeartRate: resting,
                 steps15min: steps15,
                 nowMinuteOfDay: nowMinute,
-                nightStartMinute: nightStartMinute,
-                nightEndMinute: nightEndMinute,
+                nightStartMinute: Int(d(prefs.boostNightModeStartHour) * 60),
+                nightEndMinute: Int(d(prefs.boostNightModeEndHour) * 60),
                 preSleepLeadMin: 60,
                 sleepHysteresisMin: 10,
                 wakeHrHysteresisMin: 5,
                 mlMealLikely: nil,
                 nowMs: nowMs,
-                autoBySleep: true
+                autoBySleep: prefs.boostNightModeAutoBySleep
             ),
             prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
         )
         let asleep = sleep.state == .sleeping
 
-        // 3) Post-exercise recovery (enabled; per-type window/scale).
+        // 3) Post-exercise recovery — config from settings.
         let recovery = PostExerciseRecovery.step(
             nowMs: nowMs,
             exerciseActive: activity.exerciseActive,
             exerciseType: activity.state.rawValue,
-            config: PostExerciseConfig(enabled: true),
+            config: PostExerciseConfig(
+                recoveryHours: d(prefs.boostPostExerciseHours),
+                recoveryTargetMgdl: d(prefs.boostPostExerciseTarget),
+                recoveryScale: d(prefs.boostPostExerciseScale),
+                minDurationMin: Int(d(prefs.boostPostExerciseMinDuration)),
+                enabled: prefs.boostPostExerciseEnabled
+            ),
             state: prev?.recoveryState ?? RecoveryState()
         )
 
