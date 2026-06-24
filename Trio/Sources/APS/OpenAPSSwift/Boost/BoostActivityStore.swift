@@ -60,3 +60,25 @@ final class BoostActivityStore: @unchecked Sendable {
         return (snap.exerciseActive, snap.inPostExerciseWindow, snap.asleep)
     }
 }
+
+/// Persists the 28-day `SleepHistoryTracker.History` (AAPS `StringKey.ApsBoostSleepHistory`).
+/// `BoostActivityMonitor` records sleep/wake transitions into it and reads the learned
+/// aggregate (night window + resting HR) to feed the sleep detector. UserDefaults-backed,
+/// lock-guarded; stored as the serialized JSON string.
+enum BoostSleepHistoryStore {
+    private static let key = "boost_sleep_history_v1"
+    private static let lock = NSLock()
+    private static let defaults = UserDefaults.standard
+
+    static func load() -> SleepHistoryTracker.History {
+        lock.lock()
+        defer { lock.unlock() }
+        return SleepHistoryTracker.deserialize(defaults.string(forKey: key) ?? "")
+    }
+
+    static func save(_ history: SleepHistoryTracker.History) {
+        lock.lock()
+        defer { lock.unlock() }
+        defaults.set(SleepHistoryTracker.serialize(history), forKey: key)
+    }
+}

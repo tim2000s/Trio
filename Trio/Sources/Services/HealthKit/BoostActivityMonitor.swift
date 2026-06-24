@@ -124,18 +124,30 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             avgHeartRate: avgHr, thresholds: thresholds
         ))
 
-        // 2) Sleep state machine — night window + auto-by-sleep from settings.
+        // 2) Sleep state machine — uses the LEARNED night window + resting HR once enough
+        // sessions exist (AAPS SleepHistoryTracker.aggregate → effective values feed the
+        // detector; the night-mode clock window itself stays configured). Below the learning
+        // threshold these fall back to the configured night window / measured resting HR.
+        let history = BoostSleepHistoryStore.load()
+        let offsetMs = Double(TimeZone.current.secondsFromGMT(for: now)) * 1000.0
+        let agg = SleepHistoryTracker.aggregate(history, localOffsetMs: offsetMs)
+        let configNightStart = Int(d(prefs.boostNightModeStartHour) * 60)
+        let configNightEnd = Int(d(prefs.boostNightModeEndHour) * 60)
+        let effectiveNightStart = agg.sleepStartMinAvg ?? configNightStart
+        let effectiveNightEnd = agg.wakeMinAvg ?? configNightEnd
+        let effectiveResting = agg.restingHrBpm.map(Double.init) ?? resting
+
         let nowMinute = Calendar.current.component(.hour, from: now) * 60
             + Calendar.current.component(.minute, from: now)
         let sleep = SleepStateDetector.step(
             SleepDetectorInputs(
                 hrReadings: hrReadings,
                 hrWindowMinutes: 5,
-                restingHeartRate: resting,
+                restingHeartRate: effectiveResting,
                 steps15min: steps15,
                 nowMinuteOfDay: nowMinute,
-                nightStartMinute: Int(d(prefs.boostNightModeStartHour) * 60),
-                nightEndMinute: Int(d(prefs.boostNightModeEndHour) * 60),
+                nightStartMinute: effectiveNightStart,
+                nightEndMinute: effectiveNightEnd,
                 preSleepLeadMin: 60,
                 sleepHysteresisMin: 10,
                 wakeHrHysteresisMin: 5,
@@ -146,6 +158,28 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
         )
         let asleep = sleep.state == .sleeping
+
+        // Record sleep/wake transitions into the rolling history (AAPS: onSleepStart on any
+        // non-SLEEPING→SLEEPING; onWake on SLEEPING→non-SLEEPING, with HR p10 over the sleep
+        // period + the preceding awake period). The learned aggregate then shapes future cycles.
+        let prevSleepState = prev?.sleepState?.state ?? .awake
+        if prevSleepState != .sleeping, sleep.state == .sleeping {
+            BoostSleepHistoryStore.save(SleepHistoryTracker.onSleepStart(history, sleepStartMs: nowMs))
+        } else if prevSleepState == .sleeping, sleep.state != .sleeping, let openStart = history.openSleepStartMs {
+            let sleepHr = await fetchHrBpms(since: Date(timeIntervalSince1970: openStart / 1000.0), to: now)
+            let daytimeHr: [Double]
+            if let lastWake = SleepHistoryTracker.lastWakeMs(history), lastWake < openStart {
+                daytimeHr = await fetchHrBpms(
+                    since: Date(timeIntervalSince1970: lastWake / 1000.0),
+                    to: Date(timeIntervalSince1970: openStart / 1000.0)
+                )
+            } else {
+                daytimeHr = []
+            }
+            BoostSleepHistoryStore.save(SleepHistoryTracker.onWake(
+                history, wakeMs: nowMs, sleepHrBpms: sleepHr, daytimeHrBpms: daytimeHr
+            ))
+        }
 
         // 3) Post-exercise recovery — config from settings.
         let recovery = PostExerciseRecovery.step(
@@ -224,6 +258,24 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
                     )
                 }
                 continuation.resume(returning: readings)
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    /// HR sample BPM values over an arbitrary [since, to] window — used at a SLEEPING→AWAKE
+    /// transition to summarise the just-ended sleep period (and the preceding awake period) into
+    /// p10s for SleepHistoryTracker. Empty if no HR access / no samples.
+    private func fetchHrBpms(since: Date, to: Date) async -> [Double] {
+        guard let hrType, to > since else { return [] }
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: since, end: to)
+            let query = HKSampleQuery(
+                sampleType: hrType, predicate: predicate,
+                limit: HKObjectQueryNoLimit, sortDescriptors: nil
+            ) { _, samples, _ in
+                let bpms = (samples as? [HKQuantitySample] ?? []).map { $0.quantity.doubleValue(for: self.bpmUnit) }
+                continuation.resume(returning: bpms)
             }
             healthKitStore.execute(query)
         }
