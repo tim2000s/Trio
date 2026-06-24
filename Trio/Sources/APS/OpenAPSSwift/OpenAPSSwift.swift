@@ -55,7 +55,8 @@ struct OpenAPSSwift {
         preferences: JSON,
         basalProfile: JSON,
         trioCustomOrefVariables: JSON,
-        clock: Date
+        clock: Date,
+        simulation: Bool = false
     ) -> (OrefFunctionResult) {
         do {
             let glucose = try JSONBridge.glucose(from: glucose)
@@ -93,8 +94,18 @@ struct OpenAPSSwift {
             // shadow logs what V5 would do; active overrides the SMB (units), exactly as AAPS
             // V5-active overrides Boost-V1's SMB. baseInsulinReq = the stock determination's
             // insulinReq — V5 adds no sensitivity logic of its own. ──
+            // Skip the Boost V5 SECOND PASS for what-if simulations (bolus-calculator previews run
+            // this repeatedly). The critical reason is state safety: the adapter writes the ML ring
+            // buffer, V5 hypothesis state, meal-time history, and lastRunMs — a simulation snapshot
+            // would corrupt the next real cycle's lags / state machine. Skipping it also drops the
+            // V5 SMB override + night-mode suppression from the preview, which is correct (a what-if
+            // shouldn't assume a hypothetical SMB). Note: the FIRST pass (DeterminationGenerator)
+            // still applies the user's active Boost sensitivity model — DynISF / future_sens / the
+            // V6 pre-meal target — so the preview reflects the model they actually run on; it is NOT
+            // a pure stock-oref determination for an active user.
             let boostMode = preferences.boostMode
-            if boostMode != .off,
+            if !simulation,
+               boostMode != .off,
                var det = rawDetermination,
                let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose)
             {
