@@ -564,6 +564,7 @@
 		C2BA6B9A2F7593C300348E6A /* NotificationIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */; };
 		C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990EDF122666600B079D37AB /* ActivityLoadTracker.swift */; };
 		B0057EA1FEA70000000000B1 /* BoostMlFeatureBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057EA1FEA70000000000B2 /* BoostMlFeatureBuilder.swift */; };
+		B0057EA1FEA70000000000C1 /* SleepHistoryTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */; };
 		C967DACD3B1E638F8B43BE06 /* ManualTempBasalStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCFE0781F9074C2917890E8 /* ManualTempBasalStateModel.swift */; };
 		CA02000000000000000010C2 /* DeliveryLimitsSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA02000000000000000010C1 /* DeliveryLimitsSyncTests.swift */; };
 		CA370FC152BC98B3D1832968 /* BasalProfileEditorRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF8BCB0C37DEB5EC377B9612 /* BasalProfileEditorRootView.swift */; };
@@ -1379,6 +1380,7 @@
 		96653287EDB276A111288305 /* ManualTempBasalDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ManualTempBasalDataFlow.swift; sourceTree = "<group>"; };
 		990EDF122666600B079D37AB /* ActivityLoadTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ActivityLoadTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/ActivityLoadTracker.swift; sourceTree = "<group>"; };
 		B0057EA1FEA70000000000B2 /* BoostMlFeatureBuilder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostMlFeatureBuilder.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/BoostMlFeatureBuilder.swift; sourceTree = "<group>"; };
+		B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SleepHistoryTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/SleepHistoryTracker.swift; sourceTree = "<group>"; };
 		9C8D5F457B5AFF763F8CF3DF /* CarbRatioEditorProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorProvider.swift; sourceTree = "<group>"; };
 		9F9F137F126D9F8DEB799F26 /* ISFEditorProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ISFEditorProvider.swift; sourceTree = "<group>"; };
 		A0A48AE3AC813A49A517846A /* NightscoutConfigStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NightscoutConfigStateModel.swift; sourceTree = "<group>"; };
@@ -3123,6 +3125,7 @@
 				7ABBF4AAF5407C3BC0079552 /* MealTimeLearner.swift */,
 				812A0F081EAF78AE28E4303C /* DynIsf.swift */,
 				B0057EA1FEA70000000000B2 /* BoostMlFeatureBuilder.swift */,
+				B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */,
 				C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */,
 				990EDF122666600B079D37AB /* ActivityLoadTracker.swift */,
 				8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */,
@@ -5425,6 +5428,7 @@
 				4B4B55F95F14BCCE9AE98F06 /* IsfShadowEma.swift in Sources */,
 				C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */,
 				B0057EA1FEA70000000000B1 /* BoostMlFeatureBuilder.swift in Sources */,
+				B0057EA1FEA70000000000C1 /* SleepHistoryTracker.swift in Sources */,
 				C0886FDDA1C6418A23A1B383 /* NightMode.swift in Sources */,
 				3FA0DAB4880EAB9686639E0D /* BoostISF.swift in Sources */,
 				64FCBD1EB3F9A343BBA09BE5 /* BoostMealTimeStore.swift in Sources */,
