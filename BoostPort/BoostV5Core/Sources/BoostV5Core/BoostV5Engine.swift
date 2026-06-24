@@ -97,9 +97,17 @@ public struct V5Inputs {
 public struct V5PersistedState: Codable, Equatable, Sendable {
     public var mealHypothesis: MealHypothesisState
     public var mlMealLikelyNullStreak: Int
-    public init(mealHypothesis: MealHypothesisState = MealHypothesisState(), mlMealLikelyNullStreak: Int = 0) {
+    /// Epoch-ms of the last decide() — the host uses it to detect a time jump / long gap
+    /// (incl. app restart) and reset the meal hypothesis. Managed by the adapter, not decide().
+    public var lastRunMs: Double?
+    public init(
+        mealHypothesis: MealHypothesisState = MealHypothesisState(),
+        mlMealLikelyNullStreak: Int = 0,
+        lastRunMs: Double? = nil
+    ) {
         self.mealHypothesis = mealHypothesis
         self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
+        self.lastRunMs = lastRunMs
     }
 }
 
