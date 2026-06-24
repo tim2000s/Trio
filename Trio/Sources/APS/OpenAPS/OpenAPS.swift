@@ -485,7 +485,8 @@ final class OpenAPS {
             preferences: preferences,
             basalProfile: basalProfile,
             trioCustomOrefVariables: trioCustomOrefVariables,
-            useSwiftOref: useSwiftOref
+            useSwiftOref: useSwiftOref,
+            simulation: simulation
         )
 
         debug(.openAPS, "\(simulation ? "[SIMULATION]" : "") OREF DETERMINATION: \(orefDetermination)")
@@ -916,7 +917,8 @@ final class OpenAPS {
         preferences: JSON,
         basalProfile: JSON,
         trioCustomOrefVariables: JSON,
-        useSwiftOref: Bool
+        useSwiftOref: Bool,
+        simulation: Bool = false
     ) async throws -> RawJSON {
         let clock = Date()
 
@@ -934,7 +936,8 @@ final class OpenAPS {
                 preferences: preferences,
                 basalProfile: basalProfile,
                 trioCustomOrefVariables: trioCustomOrefVariables,
-                clock: clock
+                clock: clock,
+                simulation: simulation
             )
             return try swiftResult.returnOrThrow()
         } else {
