@@ -133,7 +133,8 @@ enum BoostISF {
         cob: Double,
         sensNormalTarget: Double,
         profile: Profile,
-        preferences: Preferences
+        preferences: Preferences,
+        boostActive: Bool = true
     ) -> Decimal {
         let value = DynIsf.futureSens(
             currentBg: currentBg,
@@ -148,9 +149,36 @@ enum BoostISF {
             normalTarget: dbl(preferences.boostDynIsfNormalTarget),
             insulinDivisor: insulinDivisor(profile: profile, preferences: preferences),
             velocity: dbl(preferences.boostDynIsfVelocity) / 100.0,
-            bgCap: dbl(preferences.boostDynIsfBgCap)
+            bgCap: dbl(preferences.boostDynIsfBgCap),
+            boostActive: boostActive
         )
         return Decimal(value)
+    }
+
+    /// AAPS per-cycle boost-window flag (`OpenAPSBoostPlugin` ~492–517), ported as an opt-in
+    /// overnight off-switch. When `boostWindowEnabled` is off this is always `true` (Boost runs
+    /// whenever the mode is active — the legacy behaviour). When on:
+    ///   - active only inside the clock window `[start, end)` (midnight-wrap; start==end ⇒ all day);
+    ///   - disabled if a temp target is set, high-TT isn't allowed, and the (TT-adjusted) target is
+    ///     above the DynISF normal target — matching AAPS's high-TT disable.
+    /// Sleep-in (AAPS's third disable) needs live 60-min step data and is deferred with the activity
+    /// feature. The clock/TT gates need no HealthKit data, so they work today.
+    static func boostWindowActive(
+        nowMinuteOfDay: Int,
+        temptargetSet: Bool,
+        targetMgdl: Double,
+        preferences: Preferences
+    ) -> Bool {
+        guard preferences.boostWindowEnabled else { return true }
+        let start = Int(dbl(preferences.boostWindowStartHour) * 60)
+        let end = Int(dbl(preferences.boostWindowEndHour) * 60)
+        guard NightMode.minuteInWindow(now: nowMinuteOfDay, start: start, end: end) else { return false }
+        if temptargetSet, !preferences.boostAllowWithHighTt,
+           targetMgdl > dbl(preferences.boostDynIsfNormalTarget)
+        {
+            return false
+        }
+        return true
     }
 
     /// AAPS Boost insulin divisor: peak (coerced 30–75) → (90−peak)+30 if peak<60 else +40.
