@@ -510,8 +510,14 @@ final class BaseAPSManager: APSManager, Injectable {
             // sleep detector every invoke). Without this the detector only updates on HealthKit
             // observer callbacks, which go quiet overnight exactly when drought-based sleep should
             // engage — leaving the snapshot stale and silently disengaging night-mode suppression.
-            // Awaited so this cycle's determination reads the freshly-written snapshot.
-            await boostActivityMonitor.refresh()
+            // Awaited so this cycle's determination reads the freshly-written snapshot (HealthKit
+            // completion handlers always fire, so this can't hang the loop; the snapshot's 30-min
+            // staleness guard is the backstop). Only when Boost is enabled — when off, nothing reads
+            // the snapshot, so the HealthKit work would be pure waste.
+            let boostEnabled = (storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)?.boostMode ?? .off) != .off
+            if boostEnabled {
+                await boostActivityMonitor.refresh()
+            }
 
             let determination = try await openAPS.determineBasal(
                 currentTemp: currentTemp,
