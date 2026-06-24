@@ -175,6 +175,8 @@ enum ProfileGenerator {
             .bgTargetsLookup(targets: bgTargets, tempTargets: tempTargets, profile: profile, now: clock)
         profile.minBg = range.minBg?.rounded()
         profile.maxBg = range.maxBg?.rounded()
+        // Boost: persist the pre-temp-target base profile target for the night-mode gates.
+        profile.boostBaseTargetMgdl = updatedTargets.baseProfileTargetMgdl?.rounded()
         // Note: we're using updatedTargets here because in Javascript the bgTargetsLookup
         // function mutates the input, so we want the mutated version in the
         // profile and we need to round the properties

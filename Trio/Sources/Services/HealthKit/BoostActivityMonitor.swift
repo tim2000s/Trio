@@ -22,6 +22,15 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
 
     private var observers: [HKObserverQuery] = []
 
+    // Serialize refreshes. The step + HR observer callbacks (plus the launch refresh) each
+    // fire refresh() on their own Task; without serialization two concurrent runs read the
+    // same previous snapshot, advance the sleep/recovery state machines independently, and
+    // the last writer wins — silently dropping a machine transition. Chaining each refresh
+    // after the previous one makes the prev-read → step → snapshot-write atomic. The lock
+    // only guards the brief chain swap, never an `await`.
+    private let refreshLock = NSLock()
+    private var refreshChain: Task<Void, Never>?
+
     private var stepType: HKQuantityType? { HKObjectType.quantityType(forIdentifier: .stepCount) }
     private var hrType: HKQuantityType? { HKObjectType.quantityType(forIdentifier: .heartRate) }
     private var restingHRType: HKQuantityType? { HKObjectType.quantityType(forIdentifier: .restingHeartRate) }
@@ -52,6 +61,18 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
     }
 
     func refresh() async {
+        refreshLock.lock()
+        let previous = refreshChain
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.performRefresh()
+        }
+        refreshChain = task
+        refreshLock.unlock()
+        await task.value
+    }
+
+    private func performRefresh() async {
         let now = Date()
         let nowMs = now.timeIntervalSince1970 * 1000.0
 

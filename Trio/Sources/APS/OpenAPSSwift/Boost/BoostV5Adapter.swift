@@ -175,11 +175,19 @@ enum BoostV5Adapter {
     }
 
     /// Night-mode evaluation: suppresses SMB overnight (AAPS night mode). Uses the
-    /// determination's bg/target/cob + the monitor's asleep flag + the user's config.
+    /// determination's bg/cob + the monitor's asleep flag + the user's config.
+    ///
+    /// AAPS `isNightModeActiveImpl` compares against the BASE profile target
+    /// (`profile.getTargetMgdl()`) for both the low-TT disable gate and the final
+    /// bg-vs-target gate — not the TT-adjusted target. `baseProfileTargetMgdl` is that
+    /// base target; `activeTempTargetMgdl` is the active temp-target value (clamped to
+    /// AAPS `LIMIT_TEMP_TARGET_BG` = 72–200 mg/dL) or nil when no TT is active.
     /// Returns whether to suppress and a short reason tag.
     static func nightMode(
         determination: Determination,
         preferences: Preferences,
+        baseProfileTargetMgdl: Double,
+        activeTempTargetMgdl: Double?,
         clock: Date
     ) -> (suppress: Bool, reason: String) {
         guard preferences.boostNightModeEnabled else { return (false, "") }
@@ -199,9 +207,9 @@ enum BoostV5Adapter {
         let result = NightMode.evaluate(NightModeInputs(
             nowMinuteOfDay: nowMin,
             bg: dbl(determination.bg) ?? 0,
-            profileTargetMgdl: dbl(determination.current_target) ?? 100,
+            profileTargetMgdl: baseProfileTargetMgdl,
             cob: dbl(determination.cob) ?? 0,
-            activeTempTargetMgdl: nil,
+            activeTempTargetMgdl: activeTempTargetMgdl,
             sleepActive: asleep,
             config: config
         ))
