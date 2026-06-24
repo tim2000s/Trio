@@ -101,6 +101,28 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         self.lastFreshHrSampleMs = lastFreshHrSampleMs
         self.sleepEntryReason = sleepEntryReason
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case sleepCandidateSinceMs
+        case wakeCandidateSinceMs
+        case enteredAtMs
+        case lastFreshHrSampleMs
+        case sleepEntryReason
+    }
+
+    // Custom decode so a snapshot persisted before the 2026-06 drought fields existed still
+    // decodes (missing lastFreshHrSampleMs/sleepEntryReason default to 0/nil) rather than
+    // failing the whole BoostActivitySnapshot decode and dropping a cycle of sleep state.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decodeIfPresent(SleepState.self, forKey: .state) ?? .awake
+        sleepCandidateSinceMs = try c.decodeIfPresent(Double.self, forKey: .sleepCandidateSinceMs)
+        wakeCandidateSinceMs = try c.decodeIfPresent(Double.self, forKey: .wakeCandidateSinceMs)
+        enteredAtMs = try c.decodeIfPresent(Double.self, forKey: .enteredAtMs) ?? 0
+        lastFreshHrSampleMs = try c.decodeIfPresent(Double.self, forKey: .lastFreshHrSampleMs) ?? 0
+        sleepEntryReason = try c.decodeIfPresent(String.self, forKey: .sleepEntryReason)
+    }
 }
 
 /// Per-cycle inputs from the host.

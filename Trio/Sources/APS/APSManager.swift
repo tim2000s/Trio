@@ -104,6 +104,7 @@ final class BaseAPSManager: APSManager, Injectable {
     @Injected() private var settingsManager: SettingsManager!
     @Injected() private var tddStorage: TDDStorage!
     @Injected() private var broadcaster: Broadcaster!
+    @Injected() private var boostActivityMonitor: BoostActivityMonitor!
     @Persisted(key: "lastLoopStartDate") private var lastLoopStartDate: Date = .distantPast
     @Persisted(key: "lastLoopDate") var lastLoopDate: Date = .distantPast {
         didSet {
@@ -472,6 +473,13 @@ final class BaseAPSManager: APSManager, Injectable {
             try await openAPS.createProfiles(useSwiftOref: settings.useSwiftOref)
             let currentTemp = try await fetchCurrentTempBasal(date: now)
             _ = try await autosense()
+
+            // Boost: advance the activity/sleep state machine on the loop cadence (AAPS runs its
+            // sleep detector every invoke). Without this the detector only updates on HealthKit
+            // observer callbacks, which go quiet overnight exactly when drought-based sleep should
+            // engage — leaving the snapshot stale and silently disengaging night-mode suppression.
+            // Awaited so this cycle's determination reads the freshly-written snapshot.
+            await boostActivityMonitor.refresh()
 
             let determination = try await openAPS.determineBasal(
                 currentTemp: currentTemp,
