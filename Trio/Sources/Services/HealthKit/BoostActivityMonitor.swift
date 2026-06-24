@@ -83,6 +83,11 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         async let hrAvgTask = avgQuantity(hrType, unit: bpmUnit, since: now.addingTimeInterval(-900), now: now)
         async let latestHrTask = latestQuantity(hrType, unit: bpmUnit, since: now.addingTimeInterval(-900), now: now)
         async let restingTask = latestQuantity(restingHRType, unit: bpmUnit, since: now.addingTimeInterval(-7 * 86400), now: now)
+        // Raw HR samples for the sleep detector: it computes its own duration-weighted average
+        // AND freshness/drought from per-sample timestamps. ~16 min covers the 5-min average
+        // window, the 10-min freshness cutoff, and the 15-min fresh-sample count. Drought beyond
+        // this window is carried by the persisted lastFreshHrSampleMs.
+        async let hrReadingsTask = fetchHrReadings(since: now.addingTimeInterval(-16 * 60), now: now)
 
         let steps5 = Int(await steps5Task)
         let steps15 = Int(await steps15Task)
@@ -91,6 +96,7 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         let avgHr = await hrAvgTask ?? 0
         let latestHr = await latestHrTask ?? 0
         let restingHr = await restingTask ?? 0
+        let hrReadings = await hrReadingsTask
         let restingForCalc = restingHr > 0 ? restingHr : 60
 
         let prev = BoostActivityStore.shared.snapshot
@@ -123,7 +129,8 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             + Calendar.current.component(.minute, from: now)
         let sleep = SleepStateDetector.step(
             SleepDetectorInputs(
-                avgHeartRate: avgHr,
+                hrReadings: hrReadings,
+                hrWindowMinutes: 5,
                 restingHeartRate: resting,
                 steps15min: steps15,
                 nowMinuteOfDay: nowMinute,
@@ -188,6 +195,35 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
                 options: .cumulativeSum
             ) { _, stats, _ in
                 continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    /// Raw HR samples in the window, mapped to `SleepHrReading` for the sleep detector. Each
+    /// sample's `timestampMs` is its end date; `durationMs` is the sample span floored at a 1 s
+    /// nominal so HealthKit's (typically instantaneous) samples make the detector's duration-
+    /// weighted average degrade to a simple mean rather than divide-by-zero.
+    private func fetchHrReadings(since: Date, now: Date) async -> [SleepHrReading] {
+        guard let hrType else { return [] }
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: since, end: now)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+            let query = HKSampleQuery(
+                sampleType: hrType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sort]
+            ) { _, samples, _ in
+                let readings = (samples as? [HKQuantitySample] ?? []).map { s in
+                    SleepHrReading(
+                        timestampMs: s.endDate.timeIntervalSince1970 * 1000.0,
+                        beatsPerMinute: s.quantity.doubleValue(for: self.bpmUnit),
+                        durationMs: max(s.endDate.timeIntervalSince(s.startDate) * 1000.0, 1000.0),
+                        isValid: true
+                    )
+                }
+                continuation.resume(returning: readings)
             }
             healthKitStore.execute(query)
         }
