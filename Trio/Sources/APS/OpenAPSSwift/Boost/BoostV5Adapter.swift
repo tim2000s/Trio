@@ -248,8 +248,11 @@ enum BoostV5Adapter {
         clock: Date
     ) -> (suppress: Bool, reason: String) {
         guard preferences.boostNightModeEnabled else { return (false, "") }
-        let asleep = BoostActivityStore.shared.snapshot
-            .map { clock.timeIntervalSince($0.updatedAt) <= 1800 && $0.asleep } ?? false
+        // AAPS night-mode sleepActive = autoBySleep && sleepState != AWAKE, so PRE_SLEEP also
+        // enables/extends night mode (the proactive pre-warm). This is distinct from the V5
+        // dose-suppression gate, which uses == SLEEPING. Stale snapshot (>30 min) → not active.
+        let sleepActive = BoostActivityStore.shared.snapshot
+            .map { clock.timeIntervalSince($0.updatedAt) <= 1800 && ($0.sleepState?.state ?? .awake) != .awake } ?? false
         let config = NightModeConfig(
             enabled: true,
             startMinute: Int((dbl(preferences.boostNightModeStartHour) ?? 22) * 60),
@@ -267,7 +270,7 @@ enum BoostV5Adapter {
             profileTargetMgdl: baseProfileTargetMgdl,
             cob: dbl(determination.cob) ?? 0,
             activeTempTargetMgdl: activeTempTargetMgdl,
-            sleepActive: asleep,
+            sleepActive: sleepActive,
             config: config
         ))
         return (result.suppressSmb, result.reason)
