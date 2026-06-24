@@ -92,7 +92,7 @@ struct FeatureSettingsView: BaseView {
                     if state.boostNightModeEnabled {
                         boostSlider("Start hour", $state.boostNightModeStartHour, in: 0 ... 23, step: 1)
                         boostSlider("End hour", $state.boostNightModeEndHour, in: 0 ... 23, step: 1)
-                        boostSlider("BG offset (mg/dL)", $state.boostNightModeBgOffset, in: 0 ... 90, step: 1)
+                        boostGlucoseSlider("BG offset", $state.boostNightModeBgOffset, inMgdl: 0 ... 90)
                         Toggle("Disable with COB", isOn: $state.boostNightModeDisableWithCob)
                         Toggle("Disable with low TT", isOn: $state.boostNightModeDisableWithLowTt)
                         Toggle("Auto by sleep", isOn: $state.boostNightModeAutoBySleep)
@@ -108,7 +108,7 @@ struct FeatureSettingsView: BaseView {
                 ) {
                     Toggle("Enabled", isOn: $state.boostV6PreMealEnabled)
                     if state.boostV6PreMealEnabled {
-                        boostSlider("Pre-meal target (mg/dL)", $state.boostV6PreMealTargetMgdl, in: 65 ... 90, step: 1)
+                        boostGlucoseSlider("Pre-meal target", $state.boostV6PreMealTargetMgdl, inMgdl: 65 ... 90)
                         boostSlider("Lead time (min)", $state.boostV6PreMealLeadMin, in: 30 ... 90, step: 5)
                     }
                 }
@@ -152,7 +152,7 @@ struct FeatureSettingsView: BaseView {
                     Toggle("Enabled", isOn: $state.boostPostExerciseEnabled)
                     if state.boostPostExerciseEnabled {
                         boostSlider("Recovery window (h)", $state.boostPostExerciseHours, in: 0.5 ... 8, step: 0.5)
-                        boostSlider("Recovery target (mg/dL)", $state.boostPostExerciseTarget, in: 90 ... 200, step: 1)
+                        boostGlucoseSlider("Recovery target", $state.boostPostExerciseTarget, inMgdl: 90 ... 200)
                         boostSlider("SMB scale", $state.boostPostExerciseScale, in: 0 ... 1, step: 0.05)
                         boostSlider("Min duration (min)", $state.boostPostExerciseMinDuration, in: 1 ... 120, step: 1)
                     }
@@ -183,6 +183,46 @@ struct FeatureSettingsView: BaseView {
                 value: Binding(
                     get: { (value.wrappedValue as NSDecimalNumber).doubleValue },
                     set: { value.wrappedValue = Decimal($0) }
+                ),
+                in: range,
+                step: step
+            )
+        }
+    }
+
+    /// Glucose-valued slider: stored in mg/dL, displayed + adjusted in the user's units.
+    /// (mmol/L users see/drag mmol; the value persists as mg/dL via Trio's native asMgdL.)
+    @ViewBuilder private func boostGlucoseSlider(
+        _ title: String,
+        _ valueMgdl: Binding<Decimal>,
+        inMgdl rangeMgdl: ClosedRange<Double>
+    ) -> some View {
+        let mmol = state.units == .mmolL
+        let unit = mmol ? "mmol/L" : "mg/dL"
+        let range: ClosedRange<Double> = mmol
+            ? (Decimal(rangeMgdl.lowerBound).asMmolL as NSDecimalNumber)
+            .doubleValue ... (Decimal(rangeMgdl.upperBound).asMmolL as NSDecimalNumber).doubleValue
+            : rangeMgdl
+        let step: Double = mmol ? 0.1 : 1
+        let shown = mmol
+            ? String(format: "%.1f", (valueMgdl.wrappedValue.asMmolL as NSDecimalNumber).doubleValue)
+            : String(format: "%.0f", (valueMgdl.wrappedValue as NSDecimalNumber).doubleValue)
+        VStack(alignment: .leading) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(shown) \(unit)").foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: {
+                        mmol
+                            ? (valueMgdl.wrappedValue.asMmolL as NSDecimalNumber).doubleValue
+                            : (valueMgdl.wrappedValue as NSDecimalNumber).doubleValue
+                    },
+                    set: { newValue in
+                        valueMgdl.wrappedValue = mmol ? Decimal(newValue).asMgdL : Decimal(newValue)
+                    }
                 ),
                 in: range,
                 step: step
