@@ -215,13 +215,17 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertEqual(out.state, .preSleep)
     }
 
-    // MARK: autoBySleep gate
+    // MARK: autoBySleep does NOT gate the detector (matches AAPS — detector always runs;
 
-    func testAutoBySleepDisabledForcesAwake() {
+    // autoBySleep only gates the downstream night-mode extension).
+
+    func testAutoBySleepDisabledStillAdvancesDetector() {
+        // Stay-asleep conditions with autoBySleep=false: the detector must HOLD sleeping,
+        // not force AWAKE (the old behaviour discarded in-progress state and diverged from AAPS).
         let state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
         let inputs = makeInputs(avgHeartRate: 60, steps15min: 0, nowMinuteOfDay: 1380, nowMs: 0, autoBySleep: false)
         let out = D.step(inputs, state)
-        XCTAssertEqual(out.state, .awake)
+        XCTAssertEqual(out.state, .sleeping)
     }
 
     // MARK: serialization round-trip
