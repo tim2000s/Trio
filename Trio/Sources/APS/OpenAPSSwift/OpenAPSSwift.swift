@@ -122,7 +122,16 @@ struct OpenAPSSwift {
                 )
                 det.reason += " " + result.reason
                 if boostMode == .active {
-                    det.units = Decimal(result.decision.finalDose)
+                    // Sleep gate — faithful port of Boost-V6 OpenAPSBoostPlugin.kt:1239: V5 drives the
+                    // SMB only when a microbolus is allowed AND not SLEEPING. While asleep the override
+                    // backs off and the base (V1-equivalent) SMB stands, which night mode then suppresses.
+                    // `asleep` = SleepStateDetector SLEEPING via the activity snapshot (staleness-guarded).
+                    let asleep = BoostActivityStore.shared.flags(now: clock).asleep
+                    if microBolusAllowed, !asleep {
+                        det.units = Decimal(result.decision.finalDose)
+                    } else if asleep {
+                        det.reason += " V5 suppressed (SLEEPING) — base SMB stands;"
+                    }
                     // AAPS night mode compares against the BASE profile target (pre-TT) and
                     // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).
                     let baseTarget = (profile.boostBaseTargetMgdl as NSDecimalNumber?)?.doubleValue
