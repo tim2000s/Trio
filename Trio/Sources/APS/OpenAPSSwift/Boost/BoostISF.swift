@@ -112,7 +112,9 @@ enum BoostISF {
         } else {
             sens = dbl(profileSens)
         }
-        return sens * globalScale
+        // AAPS stores sensNormalTarget rounded to 0.1 before getIsfByProfile/future_sens consume it.
+        let scaled = sens * globalScale
+        return (scaled * 10.0).rounded() / 10.0
     }
 
     /// Boost dosing sensitivity (`future_sens`), faithful to AAPS DetermineBasalBoost (~750-787).
@@ -133,32 +135,22 @@ enum BoostISF {
         profile: Profile,
         preferences: Preferences
     ) -> Decimal {
-        let bgCap = dbl(preferences.boostDynIsfBgCap)
-        let sensBg = currentBg > bgCap ? bgCap + (currentBg - bgCap) / 3.0 : currentBg
-        let fsensBg = eventualBg > bgCap ? bgCap + (eventualBg - bgCap) / 2.0 : eventualBg
-
-        func isf(_ bg: Double) -> Double {
-            isfByProfile(bg: bg, sensNormalTarget: sensNormalTarget, profile: profile, preferences: preferences, useCap: false)
-        }
-
-        let value: Double
-        if cob > 0, deltaAccl > 0 {
-            // COB + acceleration: weight toward eventual BG.
-            value = isf(fsensBg * 0.75 + sensBg * 0.25)
-        } else if delta > 4, deltaAccl > 10, currentBg < 180, eventualBg > currentBg {
-            // Rapidly accelerating: 50/50 eventual + current.
-            value = isf(fsensBg * 0.5 + sensBg * 0.5)
-        } else if currentBg > 180, abs(delta) < 2, abs(shortAvgDelta) < 2, abs(longAvgDelta) < 2 {
-            // Flat high BG: weight toward minPredBG + current.
-            value = isf(minPredBg * 0.25 + sensBg * 0.75)
-        } else if (delta > 0 && deltaAccl > 1) || eventualBg > currentBg {
-            // Rising: current BG.
-            value = isf(sensBg)
-        } else {
-            // Falling: min predicted BG.
-            value = isf(max(minPredBg, 1.0))
-        }
-        return Decimal(value).jsRounded(scale: 1)
+        let value = DynIsf.futureSens(
+            currentBg: currentBg,
+            eventualBg: eventualBg,
+            minPredBg: minPredBg,
+            delta: delta,
+            shortAvgDelta: shortAvgDelta,
+            longAvgDelta: longAvgDelta,
+            deltaAccl: deltaAccl,
+            cob: cob,
+            sensNormalTarget: sensNormalTarget,
+            normalTarget: dbl(preferences.boostDynIsfNormalTarget),
+            insulinDivisor: insulinDivisor(profile: profile, preferences: preferences),
+            velocity: dbl(preferences.boostDynIsfVelocity) / 100.0,
+            bgCap: dbl(preferences.boostDynIsfBgCap)
+        )
+        return Decimal(value)
     }
 
     /// AAPS Boost insulin divisor: peak (coerced 30–75) → (90−peak)+30 if peak<60 else +40.

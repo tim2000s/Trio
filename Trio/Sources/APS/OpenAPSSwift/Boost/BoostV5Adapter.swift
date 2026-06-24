@@ -65,7 +65,7 @@ enum BoostV5Adapter {
         let longAvg = (glucoseStatus.longAvgDelta as NSDecimalNumber).doubleValue
         let bg = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
         let maxDelta = abs(delta) // AAPS: maxDelta = abs(gs.delta) (NOT glucoseStatus.maxDelta)
-        let deltaAccl = 100.0 * (delta - shortAvg) / max(abs(shortAvg), 2.0)
+        let deltaAccl = DynIsf.deltaAccl(delta: delta, shortAvgDelta: shortAvg)
 
         let eventualBg = determination.eventualBG.map(Double.init) ?? bg
         let targetBg = dbl(determination.current_target) ?? 100

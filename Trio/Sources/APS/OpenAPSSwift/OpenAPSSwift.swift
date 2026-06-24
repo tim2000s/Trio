@@ -104,7 +104,10 @@ struct OpenAPSSwift {
                     glucose: glucose,
                     iobData: iob,
                     maxIob: (preferences.maxIOB as NSDecimalNumber).doubleValue,
-                    roundSmbTo: 0.05,
+                    // Pump bolus increment (AAPS rounds SMB to the pump step); fall back to 0.05.
+                    roundSmbTo: preferences.bolusIncrement > 0
+                        ? (preferences.bolusIncrement as NSDecimalNumber).doubleValue
+                        : 0.05,
                     microBolusAllowed: microBolusAllowed,
                     mode: boostMode,
                     knobs: BoostV5Adapter.V5Knobs(

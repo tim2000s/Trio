@@ -520,7 +520,7 @@ enum DeterminationGenerator {
                 delta: dStatusDelta,
                 shortAvgDelta: dStatusShort,
                 longAvgDelta: dStatusLong,
-                deltaAccl: 100.0 * (dStatusDelta - dStatusShort) / max(abs(dStatusShort), 2.0),
+                deltaAccl: DynIsf.deltaAccl(delta: dStatusDelta, shortAvgDelta: dStatusShort),
                 cob: (mealData.mealCOB as NSDecimalNumber).doubleValue,
                 sensNormalTarget: sensNT,
                 profile: profile,
@@ -544,7 +544,8 @@ enum DeterminationGenerator {
                 basal: basal,
                 profile: profile,
                 determination: determination,
-                adjustedSensitivity: dosingSensitivity,
+                adjustedSensitivity: adjustedSensitivity, // naive + worst-case legs: stock sens
+                insulinReqSensitivity: dosingSensitivity, // primary leg: future_sens (active) / stock
                 overrideFactor: trioCustomOrefVariables.overrideFactor()
             )
         determination = lowEventualGlucoseDetermination

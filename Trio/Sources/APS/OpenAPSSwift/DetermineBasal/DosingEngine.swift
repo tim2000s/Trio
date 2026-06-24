@@ -378,6 +378,10 @@ enum DosingEngine {
         profile: Profile,
         determination: Determination,
         adjustedSensitivity: Decimal,
+        // Sensitivity for the primary low-temp insulinReq leg only. In Boost active this is
+        // future_sens (AAPS uses future_sens here but stock `sens` for the naive + worst-case legs);
+        // otherwise it equals adjustedSensitivity.
+        insulinReqSensitivity: Decimal,
         overrideFactor: Decimal
     ) throws -> (shouldSetTempBasal: Bool, determination: Determination) {
         guard eventualGlucose < minGlucose else {
@@ -438,7 +442,8 @@ enum DosingEngine {
         }
 
         // calculate 30m low-temp required to get projected glucose up to target
-        var insulinRequired = 2 * min(0, (eventualGlucose - targetGlucose) / adjustedSensitivity)
+        // (AAPS: this leg uses future_sens; naive + worst-case below use stock sens)
+        var insulinRequired = 2 * min(0, (eventualGlucose - targetGlucose) / insulinReqSensitivity)
         insulinRequired = insulinRequired.jsRounded(scale: 2)
 
         let naiveInsulinRequired = min(0, (naiveEventualGlucose - targetGlucose) / adjustedSensitivity).jsRounded(scale: 2)
