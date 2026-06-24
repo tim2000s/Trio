@@ -302,6 +302,28 @@ enum DeterminationGenerator {
             throw DeterminationError.eventualGlucoseCalculationError(sensitivity: adjustedSensitivity, deviation: deviation)
         }
 
+        // Boost active: predictions recompute ISF per predicted BG (AAPS getIsfByProfile per tick),
+        // not a fixed ISF. Build the per-BG ISF closure once (sensNormalTarget is BG-independent).
+        let boostIsfAt: ((Decimal) -> Decimal)? = {
+            guard boostActive else { return nil }
+            let sensNT = BoostISF.sensNormalTarget(
+                profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
+                tdd: trioCustomOrefVariables.tdd(profile: profile),
+                profilePercent: boostProfilePercent,
+                profile: profile,
+                preferences: preferences
+            )
+            return { bg in
+                Decimal(BoostISF.isfByProfile(
+                    bg: (bg as NSDecimalNumber).doubleValue,
+                    sensNormalTarget: sensNT,
+                    profile: profile,
+                    preferences: preferences,
+                    useCap: true
+                ))
+            }
+        }()
+
         let forecastResult = ForecastGenerator.generate(
             glucose: currentGlucose,
             glucoseStatus: glucoseStatus,
@@ -320,7 +342,8 @@ enum DeterminationGenerator {
             naiveEventualGlucose: naiveEventualGlucose,
             eventualGlucose: eventualGlucose,
             threshold: threshold,
-            currentTime: currentTime
+            currentTime: currentTime,
+            boostIsfAt: boostIsfAt
         )
 
         // used for pre dosing decision sanity later on
