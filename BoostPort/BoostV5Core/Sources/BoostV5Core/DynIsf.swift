@@ -24,12 +24,11 @@ public enum DynIsf {
         public static let adjustmentFactorMinPct: Double = 1.0
         public static let adjustmentFactorMaxPct: Double = 300.0
 
-        // ---- ISF target formulae ----
+        // ---- ISF target formula ----
         /// V1: ISF = 1800 / (TDD * ln(normalTarget/insulinDivisor + 1)).
+        /// Boost uses V1 only; the V2 `2300/(…·TDD²·0.02)` formula is intentionally NOT ported
+        /// (known issues, excluded from Boost).
         public static let isfNumeratorV1: Double = 1800.0
-        /// V2: ISF = 2300 / (ln(normalTarget/insulinDivisor + 1) * TDD^2 * 0.02).
-        public static let isfNumeratorV2: Double = 2300.0
-        public static let isfV2TddCoefficient: Double = 0.02
 
         // ---- Soft bg cap (getIsfByProfile / calculateBoostIsf) ----
         /// Above the cap: bgAdj = cap + (bg - cap) / 3.0.
@@ -83,17 +82,6 @@ public enum DynIsf {
     ) -> Double {
         let logTerm = log((normalTarget / insulinDivisor) + 1.0)
         return Const.isfNumeratorV1 / (tdd * logTerm)
-    }
-
-    /// V2 ISF at normal target (Chris Wilson DynISF V2):
-    /// 2300 / (ln(normalTarget/insulinDivisor + 1) * TDD^2 * 0.02).
-    public static func isfTargetV2(
-        tdd: Double,
-        normalTarget: Double,
-        insulinDivisor: Double
-    ) -> Double {
-        let logTerm = log((normalTarget / insulinDivisor) + 1.0)
-        return Const.isfNumeratorV2 / (logTerm * tdd * tdd * Const.isfV2TddCoefficient)
     }
 
     // MARK: - Variable sensitivity

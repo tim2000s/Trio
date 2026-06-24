@@ -79,7 +79,7 @@ final class DynIsfTests: XCTestCase {
         XCTAssertEqual(high, base * 3.0, accuracy: acc)
     }
 
-    // MARK: - isfTargetV1 / V2
+    // MARK: - isfTargetV1 (Boost uses V1 only; V2 intentionally removed)
 
     func testIsfTargetV1() {
         let tdd = 40.0
@@ -87,16 +87,6 @@ final class DynIsfTests: XCTestCase {
         let insulinDivisor = 75.0
         let expected = 1800.0 / (tdd * log((normalTarget / insulinDivisor) + 1.0))
         let result = DynIsf.isfTargetV1(tdd: tdd, normalTarget: normalTarget, insulinDivisor: insulinDivisor)
-        XCTAssertEqual(result, expected, accuracy: acc)
-    }
-
-    func testIsfTargetV2() {
-        let tdd = 40.0
-        let normalTarget = 99.0
-        let insulinDivisor = 75.0
-        let logTerm = log((normalTarget / insulinDivisor) + 1.0)
-        let expected = 2300.0 / (logTerm * tdd * tdd * 0.02)
-        let result = DynIsf.isfTargetV2(tdd: tdd, normalTarget: normalTarget, insulinDivisor: insulinDivisor)
         XCTAssertEqual(result, expected, accuracy: acc)
     }
 
