@@ -12,16 +12,29 @@ enum BoostV5Adapter {
 
     /// Run the V5 engine for this cycle against the stock determination + glucose status.
     /// Returns the decision; the caller decides whether to act on it (mode-gated).
-    /// Map a 5-min BG delta (mg/dL) to the model's numeric trend feature (-2…+2),
-    /// approximating the Nightscout trend arrows the AAPS model was trained on.
-    private static func directionNum(fromDelta delta: Double) -> Double {
-        switch delta {
-        case 9...: return 2 // double up
-        case 3 ..< 9: return 1 // single / 45° up
-        case -3 ... 3: return 0 // flat
-        case -9 ..< -3: return -1 // single / 45° down
-        default: return -2 // double down
+    /// ML `direction_num` feature, EXACTLY matching AAPS DetermineBasalBoost (bucketing of
+    /// `shortAvgDelta` at ±5/±10/±15 mg/dL per 5-min — the training-time NS-arrow encoding).
+    private static func directionNum(shortAvgDelta: Double) -> Double {
+        switch shortAvgDelta {
+        case let d where d > 15: return 2.0
+        case let d where d > 10: return 1.5
+        case let d where d > 5: return 1.0
+        case let d where d > -5: return 0.0
+        case let d where d > -10: return -1.0
+        case let d where d > -15: return -1.5
+        default: return -2.0
         }
+    }
+
+    /// Short-horizon (first 6 prediction points ≈ 30 min) min across the IOB/COB/UAM/ZT series,
+    /// matching AAPS `shortHorizonMinGuard`. The full-horizon `minGuardBG` over-fires the
+    /// min_guard_bg hard gate (~50% of cycles in AAPS testing). Returns nil if no predictions.
+    private static func shortHorizonMinGuard(_ predictions: Predictions?) -> Double? {
+        guard let predictions else { return nil }
+        let series = [predictions.iob, predictions.cob, predictions.uam, predictions.zt]
+        let firstSix = series.compactMap { $0 }.flatMap { $0.prefix(6) }
+        guard let minValue = firstSix.min() else { return nil }
+        return Double(minValue)
     }
 
     /// User-tunable V5 knobs (from Preferences). Ranges match AAPS.
@@ -51,14 +64,18 @@ enum BoostV5Adapter {
         let shortAvg = (glucoseStatus.shortAvgDelta as NSDecimalNumber).doubleValue
         let longAvg = (glucoseStatus.longAvgDelta as NSDecimalNumber).doubleValue
         let bg = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
-        let maxDelta = (glucoseStatus.maxDelta as NSDecimalNumber).doubleValue
+        let maxDelta = abs(delta) // AAPS: maxDelta = abs(gs.delta) (NOT glucoseStatus.maxDelta)
         let deltaAccl = 100.0 * (delta - shortAvg) / max(abs(shortAvg), 2.0)
 
         let eventualBg = determination.eventualBG.map(Double.init) ?? bg
         let targetBg = dbl(determination.current_target) ?? 100
-        let baseInsulinReq = max(0.0, dbl(determination.insulinReq) ?? 0.0)
+        // Budget base is floored at 0 (AAPS coerceAtLeast(0)); the ML feature stays SIGNED.
+        let signedInsulinReq = dbl(determination.insulinReq) ?? 0.0
+        let baseInsulinReq = max(0.0, signedInsulinReq)
         let iob = dbl(determination.iob) ?? 0.0
-        let minGuardBg = dbl(determination.minGuardBG) ?? bg
+        // 30-min short-horizon min (AAPS shortHorizonMinGuard); fall back to full-horizon, then bg.
+        let minGuardBg = shortHorizonMinGuard(determination.predictions)
+            ?? dbl(determination.minGuardBG) ?? bg
         let minGuardThreshold = dbl(determination.threshold) ?? 80.0
         let hour = Calendar.current.component(.hour, from: clock)
 
@@ -71,10 +88,10 @@ enum BoostV5Adapter {
             iobTotal: current.map { ($0.iob as NSDecimalNumber).doubleValue } ?? iob,
             iobBasal: current.map { ($0.basaliob as NSDecimalNumber).doubleValue } ?? 0.0,
             bgAboveTarget: bg - targetBg,
-            directionNum: directionNum(fromDelta: delta),
+            directionNum: directionNum(shortAvgDelta: shortAvg),
             hour: Double(hour),
             iobActivity: current.map { ($0.activity as NSDecimalNumber).doubleValue } ?? 0.0,
-            insulinReq: baseInsulinReq
+            insulinReq: signedInsulinReq
         )
         let mlHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
         let mlMealLikely = BoostMLModels.mealLikely(mlFeatures)
@@ -82,6 +99,16 @@ enum BoostV5Adapter {
         // ── HealthKit activity (steps + HR) → V5 exercise modifiers. Snapshot is kept fresh
         // by BoostActivityMonitor; flags() guards on staleness. Inert until Health read is granted. ──
         let activity = BoostActivityStore.shared.flags(now: clock)
+
+        // Time-jump / long-gap reset: minutes since the last decide(). A normal ~5-min cycle is
+        // <30 (no reset); a clock jump, timezone change, long loop/pump gap, or app restart (state
+        // persisted in UserDefaults) yields a large value → MealHypothesis.resetIfNeeded clears the
+        // hypothesis (TIME_JUMP_RESET_MINUTES = 30). This is the wired reset signal in Trio;
+        // profileSwitched/pumpDisconnected/loopSuspended aren't exposed at this layer (left false),
+        // but any >30-min interruption from those is caught by the gap.
+        let persisted = store.loadState()
+        let nowMs = clock.timeIntervalSince1970 * 1000.0
+        let timeJumpMinutes = persisted.lastRunMs.map { abs((nowMs - $0) / 60000.0) } ?? 0.0
 
         let inputs = V5Inputs(
             delta: delta,
@@ -108,6 +135,7 @@ enum BoostV5Adapter {
             inPostExerciseWindow: activity.inPostExerciseWindow,
             asleep: activity.asleep,
             fastCarbConfirmEnabled: knobs.fastCarbConfirm,
+            timeJumpMinutes: timeJumpMinutes,
             aggressionUserKnob: knobs.aggression,
             hypoCautionUserKnob: knobs.hypoCaution,
             sensitivityUserKnob: knobs.sensitivity,
@@ -115,8 +143,10 @@ enum BoostV5Adapter {
             committedCapU: knobs.committedCapU
         )
 
-        let decision = BoostV5Engine.decide(inputs, persisted: store.loadState())
-        store.saveState(decision.newPersistedState)
+        let decision = BoostV5Engine.decide(inputs, persisted: persisted)
+        var newState = decision.newPersistedState
+        newState.lastRunMs = nowMs
+        store.saveState(newState)
         // V6 learning: record a fresh CONFIRMED commit (meal-time history → pre-meal target).
         if decision.mealHypothesis == .confirmed, decision.mealHypothesisAge == 0 {
             BoostMealTimeStore.shared.recordConfirmed(at: clock)

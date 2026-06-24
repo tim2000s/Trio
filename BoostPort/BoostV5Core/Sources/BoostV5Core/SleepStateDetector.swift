@@ -132,12 +132,10 @@ public struct SleepDetectorInputs {
 public enum SleepStateDetector {
     /// Pure transition. Returns the new persisted state. Caller stores it and passes it back next cycle.
     public static func step(_ inputs: SleepDetectorInputs, _ state: SleepDetectorState) -> SleepDetectorState {
-        // When auto-sleep is disabled, the detector is inert: force/hold AWAKE.
-        guard inputs.autoBySleep else {
-            if state.state == .awake { return state }
-            return SleepDetectorState(state: .awake, enteredAtMs: inputs.nowMs)
-        }
-
+        // NOTE: the detector always advances its state machine (matching AAPS, which runs the
+        // detector every cycle). `autoBySleep` is NOT gated here — it gates only the downstream
+        // night-mode extension (see NightMode). Resetting to AWAKE here would discard in-progress
+        // hysteresis and diverge from AAPS, so it is intentionally not done.
         let C = SleepStateConstants.self
         let avgHr: Double? = inputs.avgHeartRate > 0 ? inputs.avgHeartRate : nil
         let sleepCap = inputs.restingHeartRate * C.sleepHrMultiplier
