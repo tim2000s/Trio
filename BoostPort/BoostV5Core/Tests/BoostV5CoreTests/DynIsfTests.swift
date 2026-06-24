@@ -89,6 +89,27 @@ final class DynIsfTests: XCTestCase {
         XCTAssertEqual(result, isfAt(90), accuracy: 0.05)
     }
 
+    func testFutureSensBoostInactiveSkipsAggressiveConditions() {
+        // Same inputs as testFutureSensCobBranch (cob>0 && deltaAccl>0 → condition 1 when active).
+        // With boostActive=false, conditions 1 & 2 are gated off, so it falls through to the
+        // rising leg (delta>0 && deltaAccl>1) → ISF at sensBg (current 120), matching AAPS where
+        // profile.boostActive=false uses the calm legs.
+        let inactive = DynIsf.futureSens(
+            currentBg: 120, eventualBg: 160, minPredBg: 110,
+            delta: 3, shortAvgDelta: 2, longAvgDelta: 1, deltaAccl: 5,
+            cob: 20, sensNormalTarget: 50.0, normalTarget: 99.0, insulinDivisor: 55.0,
+            velocity: 1.0, bgCap: 210.0, boostActive: false
+        )
+        XCTAssertEqual(inactive, isfAt(120), accuracy: 0.05)
+        // And it differs from the active COB-weighted result.
+        let active = fsArgs(
+            currentBg: 120, eventualBg: 160, minPredBg: 110,
+            delta: 3, shortAvg: 2, longAvg: 1, deltaAccl: 5, cob: 20
+        )
+        XCTAssertEqual(active, isfAt(160 * 0.75 + 120 * 0.25), accuracy: 0.05)
+        XCTAssertNotEqual(inactive, active, accuracy: 0.05)
+    }
+
     // MARK: - blendedTdd
 
     func testBlendedTddStandardBlend() {

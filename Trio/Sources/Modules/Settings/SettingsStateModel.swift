@@ -31,6 +31,10 @@ extension Settings {
         @Published var boostDynIsfBgCap: Decimal = 210
         @Published var boostDynIsfVelocity: Decimal = 100
         @Published var boostDynIsfAdjustmentFactor: Decimal = 100
+        @Published var boostWindowEnabled: Bool = false
+        @Published var boostWindowStartHour: Decimal = 7
+        @Published var boostWindowEndHour: Decimal = 23
+        @Published var boostAllowWithHighTt: Bool = false
         @Published var boostNightModeEnabled: Bool = false
         @Published var boostNightModeStartHour: Decimal = 22
         @Published var boostNightModeEndHour: Decimal = 7
@@ -84,6 +88,10 @@ extension Settings {
             subscribePreferencesSetting(\.boostDynIsfVelocity, on: $boostDynIsfVelocity) { boostDynIsfVelocity = $0 }
             subscribePreferencesSetting(\.boostDynIsfAdjustmentFactor, on: $boostDynIsfAdjustmentFactor) {
                 boostDynIsfAdjustmentFactor = $0 }
+            subscribePreferencesSetting(\.boostWindowEnabled, on: $boostWindowEnabled) { boostWindowEnabled = $0 }
+            subscribePreferencesSetting(\.boostWindowStartHour, on: $boostWindowStartHour) { boostWindowStartHour = $0 }
+            subscribePreferencesSetting(\.boostWindowEndHour, on: $boostWindowEndHour) { boostWindowEndHour = $0 }
+            subscribePreferencesSetting(\.boostAllowWithHighTt, on: $boostAllowWithHighTt) { boostAllowWithHighTt = $0 }
             subscribePreferencesSetting(\.boostNightModeEnabled, on: $boostNightModeEnabled) { boostNightModeEnabled = $0 }
             subscribePreferencesSetting(\.boostNightModeStartHour, on: $boostNightModeStartHour) { boostNightModeStartHour = $0 }
             subscribePreferencesSetting(\.boostNightModeEndHour, on: $boostNightModeEndHour) { boostNightModeEndHour = $0 }

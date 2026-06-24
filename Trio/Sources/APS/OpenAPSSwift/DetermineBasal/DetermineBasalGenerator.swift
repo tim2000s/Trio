@@ -513,6 +513,16 @@ enum DeterminationGenerator {
             let dStatusDelta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
             let dStatusShort = (glucoseStatus.shortAvgDelta as NSDecimalNumber).doubleValue
             let dStatusLong = (glucoseStatus.longAvgDelta as NSDecimalNumber).doubleValue
+            // Per-cycle boost window (AAPS profile.boostActive): outside it, future_sens drops the
+            // two aggressive blend conditions. Same inputs the V5-override gate uses in OpenAPSSwift.
+            let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
+                + Calendar.current.component(.minute, from: currentTime)
+            let windowActive = BoostISF.boostWindowActive(
+                nowMinuteOfDay: nowMin,
+                temptargetSet: profile.temptargetSet ?? false,
+                targetMgdl: (adjustedGlucoseTargets.targetGlucose as NSDecimalNumber).doubleValue,
+                preferences: preferences
+            )
             dosingSensitivity = BoostISF.futureSens(
                 currentBg: (currentGlucose as NSDecimalNumber).doubleValue,
                 eventualBg: (forecastResult.eventualGlucose as NSDecimalNumber).doubleValue,
@@ -524,7 +534,8 @@ enum DeterminationGenerator {
                 cob: (mealData.mealCOB as NSDecimalNumber).doubleValue,
                 sensNormalTarget: sensNT,
                 profile: profile,
-                preferences: preferences
+                preferences: preferences,
+                boostActive: windowActive
             )
         } else {
             dosingSensitivity = adjustedSensitivity
