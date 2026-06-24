@@ -98,6 +98,17 @@ struct OpenAPSSwift {
                var det = rawDetermination,
                let glucoseStatus = try? DeterminationGenerator.getGlucoseStatus(glucoseReadings: glucose)
             {
+                // v12 ML features: cumulative SMB volume over the last 60 min and minutes since the
+                // last SMB (AAPS recentSmbVolume60Min / timeSinceLastSmbMin — type==SMB, valid; sum
+                // amount over 60 min; tSince = min(720, …), default 720 when none).
+                let smbEvents = pumpHistory.filter { ($0.isSMB ?? false) && $0.timestamp <= clock }
+                let sixtyMinAgo = clock.addingTimeInterval(-3600)
+                let recentSmb60 = smbEvents
+                    .filter { $0.timestamp >= sixtyMinAgo }
+                    .reduce(0.0) { $0 + (($1.amount ?? 0) as NSDecimalNumber).doubleValue }
+                let timeSinceSmb = smbEvents.map(\.timestamp).max()
+                    .map { min(720.0, clock.timeIntervalSince($0) / 60.0) } ?? 720.0
+
                 let result = BoostV5Adapter.run(
                     determination: det,
                     glucoseStatus: glucoseStatus,
@@ -118,7 +129,9 @@ struct OpenAPSSwift {
                         committedCapU: (preferences.boostV5CommittedCapU as NSDecimalNumber).doubleValue,
                         fastCarbConfirm: preferences.boostV5FastCarbConfirm
                     ),
-                    clock: clock
+                    clock: clock,
+                    recentSmbUnits60m: recentSmb60,
+                    timeSinceLastSmbMin: timeSinceSmb
                 )
                 det.reason += " " + result.reason
                 if boostMode == .active {

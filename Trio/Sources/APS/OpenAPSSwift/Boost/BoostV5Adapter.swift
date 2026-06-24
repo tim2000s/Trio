@@ -58,6 +58,11 @@ enum BoostV5Adapter {
         mode: BoostMode,
         knobs: V5Knobs,
         clock: Date,
+        // Cumulative SMB volume in the last 60 min and minutes since the last SMB — v12 ML
+        // features (AAPS recentSmbVolume60Min / timeSinceLastSmbMin). Defaults match AAPS
+        // (0 U / 720 min) for the legacy 8-feature model where they are unused.
+        recentSmbUnits60m: Double = 0.0,
+        timeSinceLastSmbMin: Double = 720.0,
         store: BoostV5Store = .shared
     ) -> Result {
         let delta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
@@ -83,18 +88,70 @@ enum BoostV5Adapter {
         // basaliob / activity come from the current IOB sample; the rest from the
         // determination + glucose status. nil if the bundled model didn't load.
         let current = iobData.first
+        let iobTotal = current.map { ($0.iob as NSDecimalNumber).doubleValue } ?? iob
+        let iobBasal = current.map { ($0.basaliob as NSDecimalNumber).doubleValue } ?? 0.0
+        let iobActivity = current.map { ($0.activity as NSDecimalNumber).doubleValue } ?? 0.0
+        let iobNetBasal = current.map { ($0.netbasalinsulin as NSDecimalNumber).doubleValue } ?? 0.0
+        let directionNumValue = directionNum(shortAvgDelta: shortAvg)
+        let minDelta = dbl(determination.minDelta) ?? 0.0
         let mlFeatures = BoostMLModels.Features(
             cgmMgdl: bg,
-            iobTotal: current.map { ($0.iob as NSDecimalNumber).doubleValue } ?? iob,
-            iobBasal: current.map { ($0.basaliob as NSDecimalNumber).doubleValue } ?? 0.0,
+            iobTotal: iobTotal,
+            iobBasal: iobBasal,
             bgAboveTarget: bg - targetBg,
-            directionNum: directionNum(shortAvgDelta: shortAvg),
+            directionNum: directionNumValue,
             hour: Double(hour),
-            iobActivity: current.map { ($0.activity as NSDecimalNumber).doubleValue } ?? 0.0,
+            iobActivity: iobActivity,
             insulinReq: signedInsulinReq
         )
-        let mlHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
-        let mlMealLikely = BoostMLModels.mealLikely(mlFeatures)
+        // Hypo risk: route on the LOADED model's feature count. 8 → legacy v9 path; otherwise the
+        // v12 53-feature windowed-lookback path (BoostMlFeatureBuilder + persisted 6-cycle ring
+        // buffer), matching AAPS DetermineBasalBoost's getFeatureNames() dispatch. The current
+        // snapshot is pushed to the ring each cycle and persisted across restarts.
+        let rawHypoRisk: Double?
+        if let names = BoostMLModels.hypoFeatureNames(), names.count != 8 {
+            let statics: [String: Double] = [
+                "cgm_mgdl": bg,
+                "iob_iob": iobTotal,
+                "iob_basaliob": iobBasal,
+                "bg_above_target": bg - targetBg,
+                "direction_num": directionNumValue,
+                "hour": Double(hour),
+                "iob_activity": iobActivity,
+                "sug_insulinReq": signedInsulinReq,
+                "sug_COB": dbl(determination.cob) ?? 0.0,
+                "sug_eventualBG": eventualBg,
+                "sug_expectedDelta": dbl(determination.expectedDelta) ?? 0.0,
+                "sug_minDelta": minDelta,
+                "sug_TDD": max(0.0, dbl(determination.tdd) ?? 0.0),
+                // AAPS feeds iob_bolusiob as max(0, iob − basaliob) at runtime (training-time semantics).
+                "iob_bolusiob": max(0.0, iobTotal - iobBasal),
+                "iob_netbasalinsulin": iobNetBasal,
+                "recent_smb_units_60m": recentSmbUnits60m,
+                "time_since_last_smb_min": timeSinceLastSmbMin
+            ]
+            let snapshot = BoostMlFeatureBuilder.CycleSnapshot(
+                ts: clock.timeIntervalSince1970 * 1000.0,
+                cgmMgdl: bg,
+                iobIob: iobTotal,
+                iobActivity: iobActivity,
+                sugEventualBG: eventualBg,
+                recentSmbUnits60m: recentSmbUnits60m,
+                sugMinDelta: minDelta
+            )
+            var ring = BoostMlRingBufferStore.load()
+            ring.push(snapshot)
+            let vector = BoostMlFeatureBuilder.build(
+                featureNames: names, current: snapshot, ring: ring, staticValues: statics
+            )
+            BoostMlRingBufferStore.save(ring)
+            rawHypoRisk = BoostMLModels.hypoRisk(vector: vector)
+        } else {
+            rawHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
+        }
+        // AAPS rounds both ML outputs to 3 dp before the engine consumes them.
+        let mlHypoRisk = rawHypoRisk.map { ($0 * 1000).rounded() / 1000 }
+        let mlMealLikely = BoostMLModels.mealLikely(mlFeatures).map { ($0 * 1000).rounded() / 1000 }
         // NOTE: Phase-3 postActionRiskCheck (riskAtProjectedIob) is intentionally left nil — AAPS V5
         // disables it in V0 (OpenAPSBoostV5Plugin: `riskAtProjectedIob = null`). Wiring it would
         // diverge from the reference; kept inert for exact parity. mlHypoRisk still damps the budget.
