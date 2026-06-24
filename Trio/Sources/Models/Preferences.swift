@@ -92,7 +92,7 @@ struct Preferences: JSON, Equatable {
     var boostHrMaxBpm: Decimal = 180
     var boostHrRestingBpm: Decimal = 60
     var boostHrStressDetection: Bool = false
-    var boostPostExerciseEnabled: Bool = true
+    var boostPostExerciseEnabled: Bool = false
     var boostPostExerciseHours: Decimal = 2
     var boostPostExerciseTarget: Decimal = 144
     var boostPostExerciseScale: Decimal = 0.5
