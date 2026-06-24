@@ -141,6 +141,12 @@ public enum DynIsf {
     /// Boost `future_sens` (DetermineBasalBoost ~750-787): the BG-context-weighted dosing ISF.
     /// `sensBg` = current BG soft-capped /3, `fsensBg` = eventual BG soft-capped /2; the blend BG is
     /// chosen by condition, then ISF = getIsfByProfile(blend, useCap:false), rounded to 0.1.
+    ///
+    /// `boostActive` is AAPS's per-cycle boost-window flag (`profile.boostActive`). It gates ONLY
+    /// the first two (aggressive) blend conditions — COB-with-acceleration and rapidly-accelerating
+    /// delta (DBB.kt:760, 765). When the boost window is inactive the calmer current/min-BG legs
+    /// (3–5) are used, which is the de-aggressed overnight dosing ISF. The remaining conditions do
+    /// not depend on `boostActive`, matching AAPS exactly.
     public static func futureSens(
         currentBg: Double,
         eventualBg: Double,
@@ -154,7 +160,8 @@ public enum DynIsf {
         normalTarget: Double,
         insulinDivisor: Double,
         velocity: Double,
-        bgCap: Double
+        bgCap: Double,
+        boostActive: Bool = true
     ) -> Double {
         let sensBg = currentBg > bgCap ? bgCap + (currentBg - bgCap) / 3.0 : currentBg
         let fsensBg = eventualBg > bgCap ? bgCap + (eventualBg - bgCap) / 2.0 : eventualBg
@@ -167,9 +174,9 @@ public enum DynIsf {
         }
 
         let value: Double
-        if cob > 0, deltaAccl > 0 {
+        if boostActive, cob > 0, deltaAccl > 0 {
             value = isf(fsensBg * 0.75 + sensBg * 0.25)
-        } else if delta > 4, deltaAccl > 10, currentBg < 180, eventualBg > currentBg {
+        } else if boostActive, delta > 4, deltaAccl > 10, currentBg < 180, eventualBg > currentBg {
             value = isf(fsensBg * 0.5 + sensBg * 0.5)
         } else if currentBg > 180, abs(delta) < 2, abs(shortAvgDelta) < 2, abs(longAvgDelta) < 2 {
             value = isf(minPredBg * 0.25 + sensBg * 0.75)
