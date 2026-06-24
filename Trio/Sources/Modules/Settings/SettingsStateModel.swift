@@ -52,7 +52,7 @@ extension Settings {
         @Published var boostHrMaxBpm: Decimal = 180
         @Published var boostHrRestingBpm: Decimal = 60
         @Published var boostHrStressDetection: Bool = false
-        @Published var boostPostExerciseEnabled: Bool = true
+        @Published var boostPostExerciseEnabled: Bool = false
         @Published var boostPostExerciseHours: Decimal = 2
         @Published var boostPostExerciseTarget: Decimal = 144
         @Published var boostPostExerciseScale: Decimal = 0.5
