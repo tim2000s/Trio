@@ -185,7 +185,9 @@ enum BoostV5Adapter {
             maxIob: maxIob,
             baseInsulinReq: baseInsulinReq,
             roundSmbTo: roundSmbTo,
-            enableSmbPreChecks: microBolusAllowed,
+            // AAPS: enableSmbPreChecks = activeMode ? microBolusAllowed : true. In shadow it stays
+            // permissive so the logged would-be dose isn't hard-gated to 0 (active dosing unaffected).
+            enableSmbPreChecks: mode == .active ? microBolusAllowed : true,
             mlHypoRisk: mlHypoRisk, // bundled LightGBM; nil → score renormalize path
             mlMealLikely: mlMealLikely, // bundled LightGBM; nil → score renormalize path
             recentLowBg: recentLowBg(glucose, now: clock),
