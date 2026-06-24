@@ -152,9 +152,25 @@ enum DeterminationGenerator {
             )
         }
 
+        // Boost active mode: the activity profile % from the classifier snapshot (100 = none),
+        // fresh-guarded (≤30 min). Used for both basal scaling and the ISF 100/profile% scaling.
+        let boostActive = preferences.boostMode == .active
+        let boostProfilePercent: Double = {
+            guard boostActive,
+                  let snap = BoostActivityStore.shared.snapshot,
+                  currentTime.timeIntervalSince(snap.updatedAt) <= 1800 else { return 100 }
+            return snap.profilePercent
+        }()
+
         var basal = profile.currentBasal ?? profile.basalFor(time: currentTime)
         basal *= trioCustomOrefVariables.overrideFactor()
-        if dynamicIsfResult == nil {
+        if boostActive {
+            // Boost replaces oref autosens with its own sensitivity model — do NOT autosens-adjust
+            // basal. Apply the activity profile % instead (active → lower, inactive → higher).
+            if boostProfilePercent != 100 {
+                basal = (basal * Decimal(boostProfilePercent) / 100).jsRounded(scale: 3)
+            }
+        } else if dynamicIsfResult == nil {
             basal = computeAdjustedBasal(
                 profile: profile,
                 currentBasalRate: profile.currentBasal ?? profile.basalFor(time: currentTime),
@@ -170,28 +186,17 @@ enum DeterminationGenerator {
             )
         }
 
-        // Boost active mode: scale basal by the activity profile % (active → lower, inactive →
-        // higher), from the classifier snapshot. AAPS's profileSwitch% also scales the ISF
-        // divisor — TODO; this applies the basal portion. Fresh-guarded (≤30 min).
-        if preferences.boostMode == .active,
-           let activitySnap = BoostActivityStore.shared.snapshot,
-           currentTime.timeIntervalSince(activitySnap.updatedAt) <= 1800,
-           activitySnap.profilePercent != 100
-        {
-            basal = (basal * Decimal(activitySnap.profilePercent) / 100).jsRounded(scale: 3)
-        }
-
         // this is the `sens` variable in JS, it's the adjusted sensitivity.
-        // Boost active mode swaps in Boost DynISF here, so eventualBG/predictions/insulinReq
-        // (and therefore V5's baseInsulinReq) are all Boost-flavoured. Shadow/off stay stock.
+        // Boost active mode swaps in Boost DynISF here (V1, no autosens, profile-% scaled), so
+        // eventualBG/predictions/insulinReq (and V5's baseInsulinReq) are Boost-flavoured.
         let baseSensitivity = profile.sens ?? profile.sensitivityFor(time: currentTime)
         let adjustedSensitivity: Decimal
-        if preferences.boostMode == .active {
+        if boostActive {
             adjustedSensitivity = BoostISF.adjustedSensitivity(
                 profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
-                sensitivityRatio: sensitivityRatio,
                 currentGlucose: currentGlucose,
                 tdd: trioCustomOrefVariables.tdd(profile: profile),
+                profilePercent: boostProfilePercent,
                 hourOfDay: Calendar.current.component(.hour, from: currentTime),
                 profile: profile,
                 preferences: preferences
