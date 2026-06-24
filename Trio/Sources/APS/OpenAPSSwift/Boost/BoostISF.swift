@@ -115,6 +115,52 @@ enum BoostISF {
         return sens * globalScale
     }
 
+    /// Boost dosing sensitivity (`future_sens`), faithful to AAPS DetermineBasalBoost (~750-787).
+    /// A BG-context-weighted ISF used ONLY for the insulinReq math (not predictions): it evaluates
+    /// getIsfByProfile (uncapped) at a blend of the current BG (`sensBg`, soft-capped /3) and the
+    /// eventual BG (`fsensBg`, soft-capped /2) — or minPredBG when falling — per the same conditions
+    /// AAPS uses. Returns ISF rounded to 0.1.
+    static func futureSens(
+        currentBg: Double,
+        eventualBg: Double,
+        minPredBg: Double,
+        delta: Double,
+        shortAvgDelta: Double,
+        longAvgDelta: Double,
+        deltaAccl: Double,
+        cob: Double,
+        sensNormalTarget: Double,
+        profile: Profile,
+        preferences: Preferences
+    ) -> Decimal {
+        let bgCap = dbl(preferences.boostDynIsfBgCap)
+        let sensBg = currentBg > bgCap ? bgCap + (currentBg - bgCap) / 3.0 : currentBg
+        let fsensBg = eventualBg > bgCap ? bgCap + (eventualBg - bgCap) / 2.0 : eventualBg
+
+        func isf(_ bg: Double) -> Double {
+            isfByProfile(bg: bg, sensNormalTarget: sensNormalTarget, profile: profile, preferences: preferences, useCap: false)
+        }
+
+        let value: Double
+        if cob > 0, deltaAccl > 0 {
+            // COB + acceleration: weight toward eventual BG.
+            value = isf(fsensBg * 0.75 + sensBg * 0.25)
+        } else if delta > 4, deltaAccl > 10, currentBg < 180, eventualBg > currentBg {
+            // Rapidly accelerating: 50/50 eventual + current.
+            value = isf(fsensBg * 0.5 + sensBg * 0.5)
+        } else if currentBg > 180, abs(delta) < 2, abs(shortAvgDelta) < 2, abs(longAvgDelta) < 2 {
+            // Flat high BG: weight toward minPredBG + current.
+            value = isf(minPredBg * 0.25 + sensBg * 0.75)
+        } else if (delta > 0 && deltaAccl > 1) || eventualBg > currentBg {
+            // Rising: current BG.
+            value = isf(sensBg)
+        } else {
+            // Falling: min predicted BG.
+            value = isf(max(minPredBg, 1.0))
+        }
+        return Decimal(value).jsRounded(scale: 1)
+    }
+
     /// AAPS Boost insulin divisor: peak (coerced 30–75) → (90−peak)+30 if peak<60 else +40.
     static func insulinDivisor(profile: Profile, preferences: Preferences) -> Double {
         let peakRaw = preferences.useCustomPeakTime ? dbl(profile.insulinPeakTime) : curveDefaultPeak(profile.curve)

@@ -79,6 +79,10 @@ struct FeatureSettingsView: BaseView {
                 ) {
                     Toggle("Use TDD", isOn: $state.boostUseTdd)
                     Toggle("Circadian ISF", isOn: $state.boostEnableCircadianIsf)
+                    boostGlucoseSlider("Normal target", $state.boostDynIsfNormalTarget, inMgdl: 70 ... 120)
+                    boostGlucoseSlider("BG cap", $state.boostDynIsfBgCap, inMgdl: 100 ... 300)
+                    boostSlider("Velocity %", $state.boostDynIsfVelocity, in: 0 ... 100, step: 5)
+                    boostSlider("Adjustment factor %", $state.boostDynIsfAdjustmentFactor, in: 1 ... 300, step: 1)
                 }
                 .listRowBackground(Color.chart)
 

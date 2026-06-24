@@ -27,6 +27,10 @@ extension Settings {
         @Published var boostV5FastCarbConfirm: Bool = true
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
+        @Published var boostDynIsfNormalTarget: Decimal = 99
+        @Published var boostDynIsfBgCap: Decimal = 210
+        @Published var boostDynIsfVelocity: Decimal = 100
+        @Published var boostDynIsfAdjustmentFactor: Decimal = 100
         @Published var boostNightModeEnabled: Bool = false
         @Published var boostNightModeStartHour: Decimal = 22
         @Published var boostNightModeEndHour: Decimal = 7
@@ -75,6 +79,11 @@ extension Settings {
             subscribePreferencesSetting(\.boostV5FastCarbConfirm, on: $boostV5FastCarbConfirm) { boostV5FastCarbConfirm = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
+            subscribePreferencesSetting(\.boostDynIsfNormalTarget, on: $boostDynIsfNormalTarget) { boostDynIsfNormalTarget = $0 }
+            subscribePreferencesSetting(\.boostDynIsfBgCap, on: $boostDynIsfBgCap) { boostDynIsfBgCap = $0 }
+            subscribePreferencesSetting(\.boostDynIsfVelocity, on: $boostDynIsfVelocity) { boostDynIsfVelocity = $0 }
+            subscribePreferencesSetting(\.boostDynIsfAdjustmentFactor, on: $boostDynIsfAdjustmentFactor) {
+                boostDynIsfAdjustmentFactor = $0 }
             subscribePreferencesSetting(\.boostNightModeEnabled, on: $boostNightModeEnabled) { boostNightModeEnabled = $0 }
             subscribePreferencesSetting(\.boostNightModeStartHour, on: $boostNightModeStartHour) { boostNightModeStartHour = $0 }
             subscribePreferencesSetting(\.boostNightModeEndHour, on: $boostNightModeEndHour) { boostNightModeEndHour = $0 }

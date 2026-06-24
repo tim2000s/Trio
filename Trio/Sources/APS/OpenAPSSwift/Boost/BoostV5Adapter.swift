@@ -95,6 +95,9 @@ enum BoostV5Adapter {
         )
         let mlHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
         let mlMealLikely = BoostMLModels.mealLikely(mlFeatures)
+        // NOTE: Phase-3 postActionRiskCheck (riskAtProjectedIob) is intentionally left nil — AAPS V5
+        // disables it in V0 (OpenAPSBoostV5Plugin: `riskAtProjectedIob = null`). Wiring it would
+        // diverge from the reference; kept inert for exact parity. mlHypoRisk still damps the budget.
 
         // ── HealthKit activity (steps + HR) → V5 exercise modifiers. Snapshot is kept fresh
         // by BoostActivityMonitor; flags() guards on staleness. Inert until Health read is granted. ──
