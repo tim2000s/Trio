@@ -120,6 +120,11 @@ struct OpenAPSSwift {
                 det.reason += " " + result.reason
                 if boostMode == .active {
                     det.units = Decimal(result.decision.finalDose)
+                    let night = BoostV5Adapter.nightMode(determination: det, preferences: preferences, clock: clock)
+                    if night.suppress {
+                        det.units = 0
+                        det.reason += " nightMode(SMB suppressed)"
+                    }
                 }
                 rawDetermination = det
             }

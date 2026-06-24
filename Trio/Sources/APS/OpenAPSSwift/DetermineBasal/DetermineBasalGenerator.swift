@@ -204,7 +204,7 @@ enum DeterminationGenerator {
             )
         }
 
-        let (adjustedGlucoseTargets, threshold) = adjustGlucoseTargets(
+        let (computedTargets, threshold) = adjustGlucoseTargets(
             profile: profile,
             autosens: autosensData,
             trioCustomOrefVariables: trioCustomOrefVariables,
@@ -214,6 +214,32 @@ enum DeterminationGenerator {
             maxGlucose: profile.maxBg ?? 180,
             noise: 1
         )
+        var adjustedGlucoseTargets = computedTargets
+
+        // Boost V6: in active mode, fire an anticipatory low target inside the learned pre-meal
+        // window (lower-only), so insulinReq rises before carbs land. Suppressed during exercise.
+        if preferences.boostMode == .active,
+           preferences.boostV6PreMealEnabled,
+           !BoostActivityStore.shared.flags(now: currentTime).exerciseActive
+        {
+            let offsetMs = Double(TimeZone.current.secondsFromGMT(for: currentTime)) * 1000.0
+            let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
+                + Calendar.current.component(.minute, from: currentTime)
+            let leadMax = Int((preferences.boostV6PreMealLeadMin as NSDecimalNumber).doubleValue)
+            if MealTimeLearner.preMealWindow(
+                BoostMealTimeStore.shared.history,
+                nowMin: nowMin,
+                localOffsetMs: offsetMs,
+                leadMaxMin: leadMax
+            ) != nil {
+                let preTarget = preferences.boostV6PreMealTargetMgdl
+                if preTarget < adjustedGlucoseTargets.targetGlucose {
+                    adjustedGlucoseTargets.targetGlucose = preTarget
+                    adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
+                    adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
+                }
+            }
+        }
 
         let glucoseImpactSeries = buildGlucoseImpactSeries(iobDataSeries: iobData, sensitivity: adjustedSensitivity)
         let glucoseImpactSeriesWithZeroTemp = buildGlucoseImpactSeries(
