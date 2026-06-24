@@ -20,7 +20,8 @@ enum ForecastGenerator {
         naiveEventualGlucose _: Decimal,
         eventualGlucose: Decimal,
         threshold: Decimal,
-        currentTime: Date
+        currentTime: Date,
+        boostIsfAt: ((Decimal) -> Decimal)? = nil
     ) -> ForecastResult {
         let profileCarbRatio = profile.carbRatio ?? profile.carbRatioFor(time: currentTime)
         let adjustedCarbRatio: Decimal
@@ -62,7 +63,8 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
 
         let cobResult = forecastCOB(
@@ -82,7 +84,8 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
 
         let ztResult = forecastZT(
@@ -93,7 +96,8 @@ enum ForecastGenerator {
             dynamicIsfState: preferences.dynamicIsfState(profile: profile, trioCustomOrefVariables: trioCustomOrefVariables),
             insulinFactor: dynamicIsfResult?.insulinFactor,
             tdd: trioCustomOrefVariables.tdd(profile: profile),
-            adjustmentFactorLogrithmic: profile.adjustmentFactor
+            adjustmentFactorLogrithmic: profile.adjustmentFactor,
+            boostIsfAt: boostIsfAt
         )
 
         let initialForecasts = calculateMinMaxForecastedGlucose(
