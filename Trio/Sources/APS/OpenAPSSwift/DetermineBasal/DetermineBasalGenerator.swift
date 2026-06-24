@@ -303,17 +303,18 @@ enum DeterminationGenerator {
         }
 
         // Boost active: predictions recompute ISF per predicted BG (AAPS getIsfByProfile per tick),
-        // not a fixed ISF. Build the per-BG ISF closure once (sensNormalTarget is BG-independent).
-        let boostIsfAt: ((Decimal) -> Decimal)? = {
-            guard boostActive else { return nil }
-            let sensNT = BoostISF.sensNormalTarget(
-                profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
-                tdd: trioCustomOrefVariables.tdd(profile: profile),
-                profilePercent: boostProfilePercent,
-                profile: profile,
-                preferences: preferences
-            )
-            return { bg in
+        // not a fixed ISF. sensNormalTarget is BG-independent — compute once, reuse for both the
+        // per-BG closure and the dosing future_sens below.
+        let boostSensNT: Double? = boostActive ? BoostISF.sensNormalTarget(
+            profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
+            tdd: trioCustomOrefVariables.tdd(profile: profile),
+            profilePercent: boostProfilePercent,
+            profile: profile,
+            preferences: preferences
+        ) : nil
+
+        let boostIsfAt: ((Decimal) -> Decimal)? = boostSensNT.map { sensNT in
+            { bg in
                 Decimal(BoostISF.isfByProfile(
                     bg: (bg as NSDecimalNumber).doubleValue,
                     sensNormalTarget: sensNT,
@@ -322,7 +323,7 @@ enum DeterminationGenerator {
                     useCap: true
                 ))
             }
-        }()
+        }
 
         let forecastResult = ForecastGenerator.generate(
             glucose: currentGlucose,
@@ -504,6 +505,31 @@ enum DeterminationGenerator {
             return determination
         }
 
+        // Boost active: dosing uses `future_sens` — a BG-context-weighted ISF (AAPS) — for the
+        // insulinReq math (low-temp + SMB), distinct from the prediction ISF. Shadow/off use the
+        // stock adjustedSensitivity. Computed once here from the forecast outputs.
+        let dosingSensitivity: Decimal
+        if boostActive, let sensNT = boostSensNT {
+            let dStatusDelta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
+            let dStatusShort = (glucoseStatus.shortAvgDelta as NSDecimalNumber).doubleValue
+            let dStatusLong = (glucoseStatus.longAvgDelta as NSDecimalNumber).doubleValue
+            dosingSensitivity = BoostISF.futureSens(
+                currentBg: (currentGlucose as NSDecimalNumber).doubleValue,
+                eventualBg: (forecastResult.eventualGlucose as NSDecimalNumber).doubleValue,
+                minPredBg: (forecastResult.minIOBForecastedGlucose as NSDecimalNumber).doubleValue,
+                delta: dStatusDelta,
+                shortAvgDelta: dStatusShort,
+                longAvgDelta: dStatusLong,
+                deltaAccl: 100.0 * (dStatusDelta - dStatusShort) / max(abs(dStatusShort), 2.0),
+                cob: (mealData.mealCOB as NSDecimalNumber).doubleValue,
+                sensNormalTarget: sensNT,
+                profile: profile,
+                preferences: preferences
+            )
+        } else {
+            dosingSensitivity = adjustedSensitivity
+        }
+
         let (shouldSetTempBasalForLowEventualGlucose, lowEventualGlucoseDetermination) = try DosingEngine
             .handleLowEventualGlucose(
                 eventualGlucose: forecastResult.eventualGlucose,
@@ -518,7 +544,7 @@ enum DeterminationGenerator {
                 basal: basal,
                 profile: profile,
                 determination: determination,
-                adjustedSensitivity: adjustedSensitivity,
+                adjustedSensitivity: dosingSensitivity,
                 overrideFactor: trioCustomOrefVariables.overrideFactor()
             )
         determination = lowEventualGlucoseDetermination
@@ -590,7 +616,7 @@ enum DeterminationGenerator {
             minForecastGlucose: forecastResult.minForecastedGlucose,
             eventualGlucose: forecastResult.eventualGlucose,
             targetGlucose: adjustedGlucoseTargets.targetGlucose,
-            adjustedSensitivity: adjustedSensitivity,
+            adjustedSensitivity: dosingSensitivity, // Boost: future_sens in active; stock ISF otherwise
             maxIob: profile.maxIob,
             currentIob: currentIob,
             determination: determination
