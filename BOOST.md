@@ -113,6 +113,10 @@ cd BoostPort/BoostV5Core && swift test
 
 The full app is built with `xcodebuild` against the Trio workspace as usual.
 
+**Records:**
+- [`BoostPort/docs/TESTS.md`](BoostPort/docs/TESTS.md) — per-suite test results (193 tests, 0 failures).
+- [`BoostPort/docs/AUDIT.md`](BoostPort/docs/AUDIT.md) — the adversarial audit passes, findings by severity, and the final verdict.
+
 ## Credits & licence
 
 Boost is the work of [@tim2000s](https://github.com/tim2000s). Trio is © the Trio/Nightscout contributors and is licensed under its own terms (see the root `LICENSE`/`README.md`); this port inherits that licence. Built on the work of the OpenAPS, AndroidAPS, Loop, and Trio communities.
