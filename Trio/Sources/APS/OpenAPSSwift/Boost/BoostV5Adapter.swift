@@ -131,8 +131,12 @@ enum BoostV5Adapter {
             recentLowBg: recentLowBg(glucose, now: clock),
             cumulativeRise30min: max(0.0, shortAvg * 6.0),
             hour: hour,
-            exerciseActive: activity.exerciseActive,
-            inPostExerciseWindow: activity.inPostExerciseWindow,
+            // AAPS parity: V5 ignores exercise/post-exercise (v5_exerciseActive/v5_inPostExerciseWindow
+            // are hardcoded false in AAPS — the deferred "V0" stubs). The observed flags are still
+            // logged in the reason tag for shadow analysis; the exercise feature gets switched on
+            // (here) once that analysis is in. `asleep` IS live in AAPS (sleepState == SLEEPING), so kept.
+            exerciseActive: false,
+            inPostExerciseWindow: false,
             asleep: activity.asleep,
             fastCarbConfirmEnabled: knobs.fastCarbConfirm,
             timeJumpMinutes: timeJumpMinutes,
