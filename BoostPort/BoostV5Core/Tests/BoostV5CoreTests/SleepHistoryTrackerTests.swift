@@ -47,9 +47,13 @@ final class SleepHistoryTrackerTests: XCTestCase {
     func testAggregateAboveThresholdLearnsCircularNightWindow() {
         var h = T.History()
         // 7 sessions: sleep onset ~22:00 (1320), wake ~06:00 (360), across consecutive days.
+        // Genuine ("hr_steps") wakes so the wake-time learner trains on them (post-fix: boundary
+        // and legacy-nil wakes are excluded from wake learning).
         for i in 0 ..< 7 {
             let base = Double(i) * dayMs
-            h.sessions.append(T.Session(sleepStartMs: base + 1320 * 60000, wakeMs: base + dayMs + 360 * 60000))
+            h.sessions.append(T.Session(
+                sleepStartMs: base + 1320 * 60000, wakeMs: base + dayMs + 360 * 60000, wakeReason: "hr_steps"
+            ))
         }
         let a = T.aggregate(h, localOffsetMs: 0)
         XCTAssertEqual(a.sessionCount, 7)
@@ -101,5 +105,32 @@ final class SleepHistoryTrackerTests: XCTestCase {
     func testDeserializeEmptyIsEmpty() {
         XCTAssertEqual(T.deserialize("").sessions.count, 0)
         XCTAssertEqual(T.deserialize("garbage").sessions.count, 0)
+    }
+
+    // MARK: genuine-wake-only learning (sleep-window collapse fix)
+
+    private func wakeSessions(_ n: Int, _ reason: String?) -> T.History {
+        let wake0600 = 6.0 * 3_600_000.0
+        return T.History(sessions: (0 ..< n).map {
+            T.Session(sleepStartMs: Double($0) * dayMs, wakeMs: Double($0) * dayMs + wake0600, wakeReason: reason)
+        })
+    }
+
+    func testBoundaryAndLegacyWakesDoNotTrainLearnedWake() {
+        XCTAssertNil(T.aggregate(wakeSessions(10, "boundary"), localOffsetMs: 0).wakeMinAvg)
+        XCTAssertNil(T.aggregate(wakeSessions(10, nil), localOffsetMs: 0).wakeMinAvg) // legacy discarded
+    }
+
+    func testGenuineWakesTrainLearnedWakeOnceEnough() {
+        XCTAssertNil(T.aggregate(wakeSessions(6, "hr_steps"), localOffsetMs: 0).wakeMinAvg) // <7 genuine
+        let agg = T.aggregate(wakeSessions(7, "resume"), localOffsetMs: 0)
+        XCTAssertEqual(agg.wakeMinAvg, 360) // 7 genuine wakes at 06:00
+    }
+
+    func testWakeReasonRoundTripsThroughSerialize() {
+        var h = T.onSleepStart(T.History(), sleepStartMs: 1000)
+        h = T.onWake(h, wakeMs: 1000 + 3_600_000, wakeReason: "hr_steps")
+        XCTAssertEqual(h.sessions.last?.wakeReason, "hr_steps")
+        XCTAssertEqual(T.deserialize(T.serialize(h)).sessions.last?.wakeReason, "hr_steps")
     }
 }

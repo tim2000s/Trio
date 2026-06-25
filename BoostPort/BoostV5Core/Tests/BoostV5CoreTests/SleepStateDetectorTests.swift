@@ -275,6 +275,29 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertEqual(out.state, .sleeping)
     }
 
+    // MARK: wake reason (sleep-window collapse fix)
+
+    func testHardExitWakeReasonIsBoundary() {
+        // SLEEPING at 12:00 (720), outside the 22:00-07:00 window → hard exit, tagged "boundary"
+        // so the learner won't train its wake time on it.
+        let state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
+        let out = D.step(makeInputs(avgHeartRate: 0, steps15min: 0, nowMinuteOfDay: 720, nowMs: 0), state)
+        XCTAssertEqual(out.state, .awake)
+        XCTAssertEqual(out.wakeReason, "boundary")
+    }
+
+    func testGenuineWakeReasonIsHrSteps() {
+        // resting 60 → wakeFloor 75; HR 80 + steps 120 in window (06:00) sustained 5m → genuine wake.
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
+        state = D.step(makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 0), state)
+        let out = D.step(
+            makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 5 * minute),
+            state
+        )
+        XCTAssertEqual(out.state, .awake)
+        XCTAssertEqual(out.wakeReason, "hr_steps")
+    }
+
     // MARK: serialization round-trip
 
     func testStateCodableRoundTrip() throws {

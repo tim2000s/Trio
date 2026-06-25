@@ -24,12 +24,20 @@ public enum SleepHistoryTracker {
         public var wakeMs: Double
         public var sleepHrP10: Int?
         public var daytimeHrP10: Int?
+        /// Why the session ended: "hr_steps"/"resume" = genuine wake (trains the learned wake);
+        /// "boundary" = hard night-window exit (excluded); nil = legacy/unknown (also excluded, so
+        /// pre-fix collapsed history is discarded, not re-learned). Optional → old JSON decodes nil.
+        public var wakeReason: String?
 
-        public init(sleepStartMs: Double, wakeMs: Double, sleepHrP10: Int? = nil, daytimeHrP10: Int? = nil) {
+        public init(
+            sleepStartMs: Double, wakeMs: Double,
+            sleepHrP10: Int? = nil, daytimeHrP10: Int? = nil, wakeReason: String? = nil
+        ) {
             self.sleepStartMs = sleepStartMs
             self.wakeMs = wakeMs
             self.sleepHrP10 = sleepHrP10
             self.daytimeHrP10 = daytimeHrP10
+            self.wakeReason = wakeReason
         }
     }
 
@@ -69,7 +77,8 @@ public enum SleepHistoryTracker {
         _ h: History,
         wakeMs: Double,
         sleepHrBpms: [Double] = [],
-        daytimeHrBpms: [Double] = []
+        daytimeHrBpms: [Double] = [],
+        wakeReason: String? = nil
     ) -> History {
         guard let open = h.openSleepStartMs else { return h } // no open session
         var newSessions = h.sessions
@@ -77,7 +86,8 @@ public enum SleepHistoryTracker {
             sleepStartMs: open,
             wakeMs: wakeMs,
             sleepHrP10: p10(sleepHrBpms),
-            daytimeHrP10: p10(daytimeHrBpms)
+            daytimeHrP10: p10(daytimeHrBpms),
+            wakeReason: wakeReason
         ))
         let cutoff = wakeMs - windowMs
         newSessions.removeAll { $0.sleepStartMs < cutoff }
@@ -96,19 +106,27 @@ public enum SleepHistoryTracker {
         let restingHr = restingHrSamples.count >= minSessionsForLearned ? median(restingHrSamples) : nil
         let daytimeHr = daytimeHrSamples.count >= minSessionsForLearned ? median(daytimeHrSamples) : nil
 
+        // Learned WAKE time trains ONLY on genuine wakes ("hr_steps"/"resume"); "boundary" hard-exit
+        // and legacy-nil wakes are excluded, with its own session-count gate. Breaks the hard-exit→
+        // learned-wake feedback loop: with no genuine wake signal (sparse-HR night) this stays nil and
+        // the host falls back to the configured wake. Onset still learns from all sessions.
+        let genuineWakeMins = h.sessions
+            .filter { $0.wakeReason == "hr_steps" || $0.wakeReason == "resume" }
+            .map { msToMinOfDay($0.wakeMs, localOffsetMs: localOffsetMs) }
+        let wakeAvg = genuineWakeMins.count >= minSessionsForLearned ? circularMean(genuineWakeMins) : nil
+
         if h.sessions.count < minSessionsForLearned {
             return Aggregate(
-                sleepStartMinAvg: nil, wakeMinAvg: nil, sleepDurationMinAvg: nil,
+                sleepStartMinAvg: nil, wakeMinAvg: wakeAvg, sleepDurationMinAvg: nil,
                 sessionCount: h.sessions.count, restingHrBpm: restingHr, daytimeHrBpm: daytimeHr,
                 restingHrSampleCount: restingHrSamples.count, daytimeHrSampleCount: daytimeHrSamples.count
             )
         }
         let sleepStartMin = h.sessions.map { msToMinOfDay($0.sleepStartMs, localOffsetMs: localOffsetMs) }
-        let wakeMin = h.sessions.map { msToMinOfDay($0.wakeMs, localOffsetMs: localOffsetMs) }
         let durations = h.sessions.map { Int(($0.wakeMs - $0.sleepStartMs) / 60000.0) }
         return Aggregate(
             sleepStartMinAvg: circularMean(sleepStartMin),
-            wakeMinAvg: circularMean(wakeMin),
+            wakeMinAvg: wakeAvg,
             sleepDurationMinAvg: durations.isEmpty ? nil : durations.reduce(0, +) / durations.count,
             sessionCount: h.sessions.count,
             restingHrBpm: restingHr,
