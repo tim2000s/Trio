@@ -85,6 +85,12 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
     /// Which qualifier promoted the current SLEEPING entry: "hr" or "drought"; nil when not
     /// SLEEPING. Telemetry only. (2026-06-06)
     public var sleepEntryReason: String?
+    /// Why a SLEEPING→AWAKE transition happened on the cycle that produced this state:
+    /// "boundary" (hard night-window exit), "resume", or "hr_steps"; nil otherwise. TRANSIENT —
+    /// excluded from CodingKeys so it is not persisted; it exists only to carry the wake reason
+    /// to the host within the same cycle, so the learner trains only on genuine wakes (not the
+    /// hard exit, which would otherwise feed its own learned wake → the night-window collapse).
+    public var wakeReason: String?
 
     public init(
         state: SleepState = .awake,
@@ -92,7 +98,8 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         wakeCandidateSinceMs: Double? = nil,
         enteredAtMs: Double = 0,
         lastFreshHrSampleMs: Double = 0,
-        sleepEntryReason: String? = nil
+        sleepEntryReason: String? = nil,
+        wakeReason: String? = nil
     ) {
         self.state = state
         self.sleepCandidateSinceMs = sleepCandidateSinceMs
@@ -100,6 +107,7 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         self.enteredAtMs = enteredAtMs
         self.lastFreshHrSampleMs = lastFreshHrSampleMs
         self.sleepEntryReason = sleepEntryReason
+        self.wakeReason = wakeReason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -122,6 +130,7 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         enteredAtMs = try c.decodeIfPresent(Double.self, forKey: .enteredAtMs) ?? 0
         lastFreshHrSampleMs = try c.decodeIfPresent(Double.self, forKey: .lastFreshHrSampleMs) ?? 0
         sleepEntryReason = try c.decodeIfPresent(String.self, forKey: .sleepEntryReason)
+        wakeReason = nil // transient — never persisted/decoded
     }
 }
 
@@ -307,14 +316,16 @@ public enum SleepStateDetector {
             if !inOuterWindow {
                 newState = SleepDetectorState(
                     state: .awake, enteredAtMs: inputs.nowMs,
-                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs
+                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
+                    wakeReason: "boundary" // NOT a genuine wake — excluded from learning
                 )
                 transitioned = true
             } else if transmissionResumeWake {
                 // Sync burst after a drought → user resumed interaction. No hysteresis.
                 newState = SleepDetectorState(
                     state: .awake, enteredAtMs: inputs.nowMs,
-                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs
+                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
+                    wakeReason: "resume" // genuine wake signal
                 )
                 transitioned = true
             } else {
@@ -329,7 +340,8 @@ public enum SleepStateDetector {
                         if heldMin >= inputs.wakeHrHysteresisMin {
                             newState = SleepDetectorState(
                                 state: .awake, enteredAtMs: inputs.nowMs,
-                                lastFreshHrSampleMs: newState.lastFreshHrSampleMs
+                                lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
+                                wakeReason: "hr_steps" // genuine wake signal
                             )
                             transitioned = true
                         }
