@@ -1028,12 +1028,19 @@ final class BaseAPSManager: APSManager, Injectable {
                 return
             }
 
-            // Write only knobs still at factory default (don't override a tuned user).
+            // Write only knobs still at factory default (don't override a tuned user). Unlike Android's
+            // getIfExists==null, Trio's Codable Preferences has no per-knob "user-touched" bit, so a
+            // value that merely equals the default can't be distinguished from a deliberate one. The
+            // safe-direction writes (Aggression only eases ≤1.0, HypoCaution only raises, FastCarb only
+            // tightens) are harmless if they touch a coincidental default. The two DOSING CAPS are the
+            // only loosening risk, so they are seeded with min(default, suggestion): auto-config can
+            // tighten a cap from the conservative default but can NEVER raise one without consent.
+            // (Review 2026-06-26, MEDIUM — restores parity with Android's suggestion-only guarantee.)
             var prefs = settingsManager.preferences
             if prefs.boostV5Aggression == 1.0 { prefs.boostV5Aggression = Decimal(s.aggression) }
             if prefs.boostV5HypoCaution == 1.0 { prefs.boostV5HypoCaution = Decimal(s.hypoCaution) }
-            if prefs.boostV5ConfirmedCapU == 2.5 { prefs.boostV5ConfirmedCapU = Decimal(s.confirmedCapU) }
-            if prefs.boostV5CommittedCapU == 0.5 { prefs.boostV5CommittedCapU = Decimal(s.committedCapU) }
+            if prefs.boostV5ConfirmedCapU == 2.5 { prefs.boostV5ConfirmedCapU = Decimal(min(2.5, s.confirmedCapU)) }
+            if prefs.boostV5CommittedCapU == 0.5 { prefs.boostV5CommittedCapU = Decimal(min(0.5, s.committedCapU)) }
             if prefs.boostV5FastCarbConfirm == true { prefs.boostV5FastCarbConfirm = s.fastCarbConfirm }
             prefs.boostV5AutoConfigDone = true
             settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
