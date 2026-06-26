@@ -998,8 +998,22 @@ final class BaseAPSManager: APSManager, Injectable {
                 .flatMap { $0 > 0 ? $0 : nil } }
             let smb = recent.filter { $0.isSMB == true || $0.type == .smb }.compactMap(amt)
             let manual = recent.filter { !($0.isSMB == true || $0.type == .smb) }.compactMap(amt)
-            // Bolus-only daily total estimate (conservative; used only as the committed-cap floor).
-            let tddMedian = (smb + manual).reduce(0, +) / Double(daysWithData)
+
+            // True daily TDD (basal + bolus) via TDDStorage over the 14-day history, with a sanity
+            // guard; falls back to the conservative bolus-only estimate if unavailable/implausible.
+            var tddMedian = (smb + manual).reduce(0, +) / Double(daysWithData) // fallback: bolus-only
+            if let pm = pumpManager {
+                let history14d = history.filter { $0.timestamp >= since }
+                let basalProfile = (try? await storage.retrieveAsync(
+                    OpenAPS.Settings.basalProfile, as: [BasalProfileEntry].self
+                )) ?? []
+                if let tdd = try? await tddStorage.calculateTDD(
+                    pumpManager: pm, pumpHistory: history14d, basalProfile: basalProfile
+                ) {
+                    let daily = Double(truncating: tdd.total as NSNumber) / Double(daysWithData)
+                    if (5.0 ... 200.0).contains(daily) { tddMedian = daily }
+                }
+            }
 
             let maxIob = Double(truncating: settingsManager.preferences.maxIOB as NSNumber)
             let maxBolus = Double(truncating: settingsManager.pumpSettings.maxBolus as NSNumber)
