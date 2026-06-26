@@ -69,7 +69,7 @@ final class BoostV5AutoConfigTests: XCTestCase {
         let v = [1.0, 2.0, 3.0, 4.0]
         XCTAssertEqual(BoostV5AutoConfig.percentile(v, 0), 1.0)
         XCTAssertEqual(BoostV5AutoConfig.percentile(v, 100), 4.0)
-        XCTAssertEqual(BoostV5AutoConfig.percentile(v, 50), 2.5, accuracy: 1e-9)
+        XCTAssertEqual(BoostV5AutoConfig.percentile(v, 50), 2.5, accuracy: 1E-9)
         XCTAssertEqual(BoostV5AutoConfig.percentile([], 90), 0.0)
     }
 
