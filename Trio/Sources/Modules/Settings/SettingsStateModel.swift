@@ -22,8 +22,8 @@ extension Settings {
         @Published var boostV5Aggression: Decimal = 1.0
         @Published var boostV5HypoCaution: Decimal = 1.0
         @Published var boostV5Sensitivity: Decimal = 1.0
-        @Published var boostV5ConfirmedCapU: Decimal = 1.0
-        @Published var boostV5CommittedCapU: Decimal = 0.25
+        @Published var boostV5ConfirmedCapU: Decimal = 2.5
+        @Published var boostV5CommittedCapU: Decimal = 0.5
         @Published var boostV5FastCarbConfirm: Bool = true
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
