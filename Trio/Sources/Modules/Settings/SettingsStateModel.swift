@@ -169,6 +169,12 @@ extension Settings {
             let hasPump = provider.deviceManager.pumpManager != nil
             return hasCgm && hasPump
         }
+
+        // The user moved a V5 dosing-cap slider — record it so first-activation auto-config never
+        // overrides a deliberately-set cap (Swift parity with Android's getIfExists==null). Called
+        // from the slider's onEditingChanged (genuine user interaction only, never programmatic).
+        func markBoostV5ConfirmedCapUserSet() { settingsManager.preferences.boostV5ConfirmedCapUUserSet = true }
+        func markBoostV5CommittedCapUserSet() { settingsManager.preferences.boostV5CommittedCapUUserSet = true }
     }
 }
 
