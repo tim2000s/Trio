@@ -27,7 +27,7 @@ When Active, V5's computed SMB **overrides** the stock determination's SMB on cy
 
 ## Modes (the safety gate)
 
-Set under **Settings → Features → Boost (V5)**:
+Set under **Settings → Features → Boost (V6)**:
 
 | Mode | Behaviour |
 |------|-----------|
@@ -61,7 +61,7 @@ Trio/Sources/Services/HealthKit/BoostActivityMonitor.swift  ← steps + HR → s
 
 ## Enabling it
 
-1. **Settings → Features → Boost (V5)** → pick **Shadow** first.
+1. **Settings → Features → Boost (V6)** → pick **Shadow** first.
 2. Review the determination `reason` (and Nightscout devicestatus) — Boost logs its hypothesis state, score, and would‑be SMB each cycle.
 3. Tune the V5 knobs and DynISF if needed (see below).
 4. Only switch to **Active** once you understand the shadow behaviour and accept the risk.
@@ -72,8 +72,8 @@ For sleep/night features to work, grant **Health** read access (steps + heart ra
 
 Under **Settings → Features**, the Boost sections are:
 
-- **Boost (V5)** — mode (Off / Shadow / Active).
-- **Boost V5 Tuning** — Aggression, Hypo Caution, Sensitivity, Confirmed/Committed dose caps, fast‑carb confirm.
+- **Boost (V6)** — mode (Off / Shadow / Active).
+- **Boost V6 Tuning** — Aggression, Hypo Caution, Sensitivity, Confirmed/Committed dose caps, fast‑carb confirm.
 - **Boost Dynamic ISF** — Use TDD, Circadian ISF, normal target, BG cap, velocity %, adjustment factor %.
 - **Boost Night Mode** — overnight SMB suppression: window, BG offset, disable‑with‑COB / low‑TT, auto‑by‑sleep.
 - **Boost V6 Pre‑Meal** — anticipatory lower‑only target before learned meal times.

@@ -154,7 +154,7 @@ struct OpenAPSSwift {
                     if microBolusAllowed, !asleep {
                         det.units = Decimal(result.decision.finalDose)
                     } else if asleep {
-                        det.reason += " V5 suppressed (SLEEPING) — base SMB stands;"
+                        det.reason += " V6 suppressed (SLEEPING) — base SMB stands;"
                     }
                     // AAPS night mode compares against the BASE profile target (pre-TT) and
                     // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).
