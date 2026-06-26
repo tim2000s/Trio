@@ -56,6 +56,7 @@ public enum BoostV5AutoConfig {
         public let hypoCaution: Double
         public let confirmedCapU: Double
         public let committedCapU: Double
+        public let cumulativeSmbCap60MinU: Double
         public let maxIobU: Double
         public let bolusCapU: Double
         public let fastCarbConfirm: Bool
@@ -96,6 +97,12 @@ public enum BoostV5AutoConfig {
         let committedCapU = round2(min(max(max(percentile(p.smbAmountsU, 75), p.tddMedianU / 40.0), 0.25), 2.5))
         reasons.append("Committed cap \(committedCapU)U (≈ your routine SMB size)")
 
+        // Rolling-60-min cumulative SMB cap: bounds dose *frequency* (per-shot caps only bound
+        // magnitude). ~one confirm shot plus a couple of holds per hour. (No Trio engine knob yet —
+        // shared output; the host writes it where the setting exists.)
+        let cumulativeSmbCap60MinU = round1(min(max(confirmedCapU + 2.0 * committedCapU, 1.0), 5.0))
+        reasons.append("Cumulative SMB cap/60min \(cumulativeSmbCap60MinU)U (limits dose frequency)")
+
         let maxIobU = round1(min(max(p.currentMaxIobU, 0.1), 12.0))
         let bolusCapU = round1(min(max(p.currentMaxBolusU, 0.1), 10.0))
         reasons.append("maxIOB \(maxIobU)U / bolus cap \(bolusCapU)U carried from your settings")
@@ -106,6 +113,7 @@ public enum BoostV5AutoConfig {
         return Suggestion(
             aggression: aggression, hypoCaution: hypoCaution,
             confirmedCapU: confirmedCapU, committedCapU: committedCapU,
+            cumulativeSmbCap60MinU: cumulativeSmbCap60MinU,
             maxIobU: maxIobU, bolusCapU: bolusCapU,
             fastCarbConfirm: fastCarbConfirm, rationale: reasons
         )
