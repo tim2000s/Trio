@@ -407,6 +407,7 @@
 		7F7B756BE8543965D9FDF1A2 /* HistoryDataFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A401509D21F7F35D4E109EDA /* HistoryDataFlow.swift */; };
 		8194B80890CDD6A3C13B0FEE /* SnoozeStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E26904AACA8D9C15D229D675 /* SnoozeStateModel.swift */; };
 		84779B078FF1E2467CB30FE3 /* MealHypothesis.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3CB2A01EE470ADA493569A0 /* MealHypothesis.swift */; };
+		502EADC1B82D6EF0DB9A4F61 /* BoostV5AutoConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8B62F0A2DA8BC098D5C1AA /* BoostV5AutoConfig.swift */; };
 		86408180B283DE5774E4B065 /* BoostMLModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAD96C5592948DEAF68F7FBA /* BoostMLModels.swift */; };
 		88AB39B23C9552BD6E0C9461 /* ISFEditorRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBB3BAE7494CB771ABAC7B8B /* ISFEditorRootView.swift */; };
 		8A91342A2D63D9A1007F8874 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 8A9134292D63D9A1007F8874 /* Localizable.xcstrings */; };
@@ -1595,6 +1596,7 @@
 		CFCFE0781F9074C2917890E8 /* ManualTempBasalStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ManualTempBasalStateModel.swift; sourceTree = "<group>"; };
 		D0BDC6993C1087310EDFC428 /* CarbRatioEditorRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorRootView.swift; sourceTree = "<group>"; };
 		D3CB2A01EE470ADA493569A0 /* MealHypothesis.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MealHypothesis.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/MealHypothesis.swift; sourceTree = "<group>"; };
+		AE8B62F0A2DA8BC098D5C1AA /* BoostV5AutoConfig.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostV5AutoConfig.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/BoostV5AutoConfig.swift; sourceTree = "<group>"; };
 		DC2C6489D29ECCCAD78E0721 /* GlucoseNotificationSettingsStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GlucoseNotificationSettingsStateModel.swift; sourceTree = "<group>"; };
 		DD09D47A2C5986D1003FEA5D /* CalendarEventSettingsDataFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventSettingsDataFlow.swift; sourceTree = "<group>"; };
 		DD09D47C2C5986DA003FEA5D /* CalendarEventSettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventSettingsProvider.swift; sourceTree = "<group>"; };
@@ -3109,6 +3111,7 @@
 			children = (
 				3480FC5E383D4153020057E8 /* MealSignalScore.swift */,
 				D3CB2A01EE470ADA493569A0 /* MealHypothesis.swift */,
+				AE8B62F0A2DA8BC098D5C1AA /* BoostV5AutoConfig.swift */,
 				15B2CB943CCD0C9BBB7A80CA /* AggressionBudget.swift */,
 				A2BD1E70AFAF420655084032 /* BoostV5Engine.swift */,
 				B606A3FE7C4BE421ABCA0A45 /* SafetyGates.swift */,
@@ -5410,6 +5413,7 @@
 				BD175EBE000010000000000D /* HistoryRootView+Confirmations.swift in Sources */,
 				CC3D1D3FC59A8D70AE45F63C /* MealSignalScore.swift in Sources */,
 				84779B078FF1E2467CB30FE3 /* MealHypothesis.swift in Sources */,
+				502EADC1B82D6EF0DB9A4F61 /* BoostV5AutoConfig.swift in Sources */,
 				58881B67C95BA8E80B68DDD0 /* AggressionBudget.swift in Sources */,
 				056AFD34828D51861DCA5390 /* BoostV5Engine.swift in Sources */,
 				BC55298AD02BC5BD7DE7DA53 /* SafetyGates.swift in Sources */,
