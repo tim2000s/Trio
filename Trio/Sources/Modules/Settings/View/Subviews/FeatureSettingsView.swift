@@ -65,8 +65,8 @@ struct FeatureSettingsView: BaseView {
                     boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.3, step: 0.05)
                     boostSlider("Hypo Caution", $state.boostV5HypoCaution, in: 1.0 ... 2.0, step: 0.05)
                     boostSlider("Sensitivity", $state.boostV5Sensitivity, in: 0.8 ... 1.2, step: 0.05)
-                    boostSlider("Confirmed cap (U)", $state.boostV5ConfirmedCapU, in: 0 ... 5, step: 0.05)
-                    boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 1, step: 0.05)
+                    boostSlider("Confirmed cap (U)", $state.boostV5ConfirmedCapU, in: 0 ... 7.5, step: 0.05)
+                    boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 2.5, step: 0.05)
                     Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
                 }
                 .listRowBackground(Color.chart)

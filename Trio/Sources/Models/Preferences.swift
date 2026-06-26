@@ -65,8 +65,8 @@ struct Preferences: JSON, Equatable {
     var boostV5Aggression: Decimal = 1.0 // 0.7…1.3 — scales CONFIRMED dose
     var boostV5HypoCaution: Decimal = 1.0 // 1.0…2.0 — deepens ML hypo damping
     var boostV5Sensitivity: Decimal = 1.0 // 0.8…1.2 — budget lever
-    var boostV5ConfirmedCapU: Decimal = 1.0 // 0…5 U
-    var boostV5CommittedCapU: Decimal = 0.25 // 0…1 U
+    var boostV5ConfirmedCapU: Decimal = 2.5 // 0…7.5 U
+    var boostV5CommittedCapU: Decimal = 0.5 // 0…2.5 U
     var boostV5FastCarbConfirm: Bool = true
     // Night mode (suppresses SMB overnight). Defaults match AAPS.
     var boostNightModeEnabled: Bool = false
