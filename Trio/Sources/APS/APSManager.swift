@@ -1,3 +1,4 @@
+import BoostV5Core
 import Combine
 import CoreData
 import Foundation
@@ -434,6 +435,10 @@ final class BaseAPSManager: APSManager, Injectable {
 
     func determineBasal() async throws {
         debug(.apsManager, "Start determine basal")
+
+        // One-shot: on first switch to Boost V5 active, seed the V5 knobs from the user's own prior
+        // (oref) dosing history. Guarded + self-contained; never throws into the dose path.
+        await maybeAutoConfigureBoostV5()
 
         try await calculateAndStoreTDD()
 
@@ -958,6 +963,70 @@ final class BaseAPSManager: APSManager, Injectable {
             max_duration: roundDecimal(Decimal(max_duration), 1)
         )
         return output
+    }
+
+    /// First-activation auto-config: when the user first switches to Boost V5 active, seed the V5
+    /// knobs from their own last-14-day prior (oref) dosing + glycaemia. One-shot (guarded by
+    /// `boostV5AutoConfigDone`), suggestion-only (writes a knob only if still at factory default),
+    /// fully self-contained — any error is logged and swallowed, never affecting dosing. If there
+    /// isn't enough history yet it leaves the flag unset and retries on a later cycle.
+    ///
+    /// NOTE: written against verified Trio APIs but NOT yet compiled in Xcode — confirm the field
+    /// names `PumpHistoryEvent.timestamp`, `GlucoseStored.glucose`/`.date`, and `pumpSettings.maxBolus`
+    /// on first build.
+    private func maybeAutoConfigureBoostV5() async {
+        guard settingsManager.preferences.boostMode == .active,
+              !settingsManager.preferences.boostV5AutoConfigDone
+        else { return }
+        do {
+            let since = Date().addingTimeInterval(-14 * 86400)
+
+            // Glycaemia (last 14 days).
+            let glucose = try await fetchGlucose(predicate: NSPredicate(format: "date >= %@", since as NSDate), fetchLimit: 6000)
+            let values = glucose.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+            let n = values.count
+            guard n > 0 else { return }
+            let tbr70 = 100.0 * Double(values.filter { $0 < 70 }.count) / Double(n)
+            let sev54 = 100.0 * Double(values.filter { $0 < 54 }.count) / Double(n)
+            let meanBg = Double(values.reduce(0, +)) / Double(n)
+            let firstDate = glucose.compactMap { $0.date }.min() ?? since
+            let daysWithData = max(1, Int(Date().timeIntervalSince(firstDate) / 86400))
+
+            // Boluses (last 14 days), split into SMB vs manual.
+            let history = (try? await pumpHistoryStorage.getPumpHistory()) ?? []
+            let recent = history.filter { ($0.timestamp ) >= since && ($0.type == .bolus || $0.type == .smb) }
+            func amt(_ e: PumpHistoryEvent) -> Double? { e.amount.map { Double(truncating: $0 as NSNumber) }.flatMap { $0 > 0 ? $0 : nil } }
+            let smb = recent.filter { $0.isSMB == true || $0.type == .smb }.compactMap(amt)
+            let manual = recent.filter { !($0.isSMB == true || $0.type == .smb) }.compactMap(amt)
+            // Bolus-only daily total estimate (conservative; used only as the committed-cap floor).
+            let tddMedian = (smb + manual).reduce(0, +) / Double(daysWithData)
+
+            let maxIob = Double(truncating: settingsManager.preferences.maxIOB as NSNumber)
+            let maxBolus = Double(truncating: settingsManager.pumpSettings.maxBolus as NSNumber)
+
+            guard let s = BoostV5AutoConfig.compute(BoostV5AutoConfig.PriorDosing(
+                daysWithData: daysWithData, bgReadingCount: n, tddMedianU: tddMedian,
+                manualBolusesU: manual, smbAmountsU: smb,
+                tbrBelow70Pct: tbr70, timeBelow54Pct: sev54, meanGlucoseMgdl: meanBg,
+                currentMaxIobU: maxIob, currentMaxBolusU: maxBolus
+            )) else {
+                debug(.apsManager, "BoostV5 auto-config: insufficient history (days=\(daysWithData), bg=\(n)) — will retry")
+                return
+            }
+
+            // Write only knobs still at factory default (don't override a tuned user).
+            var prefs = settingsManager.preferences
+            if prefs.boostV5Aggression == 1.0 { prefs.boostV5Aggression = Decimal(s.aggression) }
+            if prefs.boostV5HypoCaution == 1.0 { prefs.boostV5HypoCaution = Decimal(s.hypoCaution) }
+            if prefs.boostV5ConfirmedCapU == 2.5 { prefs.boostV5ConfirmedCapU = Decimal(s.confirmedCapU) }
+            if prefs.boostV5CommittedCapU == 0.5 { prefs.boostV5CommittedCapU = Decimal(s.committedCapU) }
+            if prefs.boostV5FastCarbConfirm == true { prefs.boostV5FastCarbConfirm = s.fastCarbConfirm }
+            prefs.boostV5AutoConfigDone = true
+            settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
+            debug(.apsManager, "BoostV5 auto-config applied from \(daysWithData)d history: \(s.rationale)")
+        } catch {
+            debug(.apsManager, "BoostV5 auto-config failed (non-fatal): \(error)")
+        }
     }
 
     // fetch glucose for time interval

@@ -68,6 +68,9 @@ struct Preferences: JSON, Equatable {
     var boostV5ConfirmedCapU: Decimal = 2.5 // 0…7.5 U
     var boostV5CommittedCapU: Decimal = 0.5 // 0…2.5 U
     var boostV5FastCarbConfirm: Bool = true
+    // Internal one-shot flag: set true once the V5 knobs have been auto-configured from the user's
+    // prior (oref) dosing history on first switch to boostMode == .active. Not user-facing.
+    var boostV5AutoConfigDone: Bool = false
     // Night mode (suppresses SMB overnight). Defaults match AAPS.
     var boostNightModeEnabled: Bool = false
     var boostNightModeStartHour: Decimal = 22
@@ -165,6 +168,7 @@ extension Preferences {
         case boostV5ConfirmedCapU
         case boostV5CommittedCapU
         case boostV5FastCarbConfirm
+        case boostV5AutoConfigDone
         case boostNightModeEnabled
         case boostNightModeStartHour
         case boostNightModeEndHour
@@ -461,6 +465,9 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {
             preferences.boostV5FastCarbConfirm = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
+            preferences.boostV5AutoConfigDone = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostNightModeEnabled) {
