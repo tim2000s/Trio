@@ -63,7 +63,7 @@ Trio/Sources/Services/HealthKit/BoostActivityMonitor.swift  ← steps + HR → s
 
 1. **Settings → Features → Boost (V6)** → pick **Shadow** first.
 2. Review the determination `reason` (and Nightscout devicestatus) — Boost logs its hypothesis state, score, and would‑be SMB each cycle.
-3. Tune the V5 knobs and DynISF if needed (see below).
+3. Tune the V6 knobs and DynISF if needed (see below).
 4. Only switch to **Active** once you understand the shadow behaviour and accept the risk.
 
 For sleep/night features to work, grant **Health** read access (steps + heart rate) when prompted; until then they are silently inert.
@@ -81,12 +81,57 @@ Under **Settings → Features**, the Boost sections are:
 
 Glucose‑valued settings respect your mmol/L vs mg/dL display unit.
 
+## Auto‑configuration (first activation)
+
+The first time Boost is switched to **Active**, it **seeds the V6 knobs from your own recent dosing
+history** (last 14 days) instead of dropping you onto generic defaults — the same principle, and the
+**same pure calculator**, as the AndroidAPS build (`BoostV5AutoConfig`, in `BoostV5Core`, shared by
+both platforms and verified in numeric parity). Because it reads only dosing history + glycaemia, it
+works from **standard oref** — you don't need to have come from a Boost install.
+
+**How it behaves (the guard‑rails):**
+- Runs **once**, in the background, on the first Active cycle. Gated by a one‑shot flag (`boostV5AutoConfigDone`).
+- **Suggestion‑only.** Aggression / Hypo‑Caution / fast‑carb only ever move in the *protective* direction, so they seed from the factory default. The two **dosing caps** are gated on an explicit **per‑knob “user‑touched” flag** — set only when you move that cap's slider (`onEditingChanged`, never programmatically) — so auto‑config can seed a cap (and raise it for a genuine new user) but **never overrides a cap you set yourself**, even one you set to the default value. This is the iOS equivalent of Android's `getIfExists == null`.
+- Needs **≥ 7 days of data and ≥ 1500 CGM readings**, or it does nothing and **retries on a later cycle**.
+- **Never raises aggression** above neutral on day one; safety knobs only ever *tighten*.
+- **Wrapped so any failure is logged and swallowed** — it can never block or alter the dose path.
+
+**How it determines each setting (the exact rules — identical to AndroidAPS):** it gathers, over the
+last 14 days, your **true TDD** (from `TDDStorage.calculateTDD`, with a **5–200 U/day sanity guard** and
+a conservative **bolus‑only fallback** if pump TDD is unavailable/implausible), your **meal‑bolus and SMB
+sizes** (split from pump history), your **time‑below‑range** (% < 70 and % < 54 mg/dL), and your existing
+**max‑IOB / max‑bolus**. Then:
+
+| Setting (range) | Rule |
+|---|---|
+| **HypoCaution** (1.0–2.0) | `clamp(1.0 + max(0, TBR<70% − 4)/4 + max(0, TBR<54% − 1)×0.5, 1.0, 2.0)` |
+| **Aggression** (0.7–1.3) | `0.85` if hypo‑prone (TBR<54% > 1.5 **or** TBR<70% > 6%); `0.92` if TBR<70% > 4%; else **1.0**. Never above 1.0. |
+| **Confirmed cap** (0–7.5 U) | `clamp(max(p90 meal boluses, p95 SMBs), 1.5, 7.5)` |
+| **Committed cap** (0–2.5 U) | `clamp(max(p75 SMBs, TDD/40), 0.25, 2.5)` |
+| **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, max(5.0, Confirmed))` — derived by the shared calculator; Trio has no engine knob to receive it yet, so it isn't written (the per‑shot caps still bound every dose). |
+| **Max IOB / Bolus cap** | carried from your existing limits (clamped). |
+| **Fast‑carb confirm** | **off** if hypo‑prone, otherwise on. |
+
+A well‑controlled user lands on a fully neutral config (Aggression 1.0, HypoCaution 1.0, fast‑carb on);
+a low‑prone user gets gentler aggression, more hypo damping, tighter caps, and fast‑carb off — all in the
+conservative direction.
+
+**Testing.** The derivation was validated against **12 real users from a research database** (an
+OpenAPS/Trio cohort and an AndroidAPS cohort, 400–720 days each): each user's real history produced their
+knobs, which were then run through the Boost engine over the user's own logged cycles and probed for
+danger — **no dangerous dosing** (dose‑into‑low ≤ 0.2% of cycles, blocked by the hard *minGuardBG ≥ 80*
+gate; protective knobs *reduced* lows 15–24% for hypo‑prone users; never more aggressive than the
+engine's default). The calculator itself ships unit tests in `BoostV5Core` (clamps, percentile
+interpolation, hypo‑prone vs neutral, big‑meal cap coverage, the cumulative‑cap invariant), and a
+2026‑06‑26 adversarial review specifically hardened the cap‑seeding (the user‑touched flag above) and the
+active‑override safety envelope. See the AndroidAPS `BOOST.md` §3 for the full write‑up.
+
 ## Overnight behaviour
 
 This mirrors the running AndroidAPS build:
 
 1. A **drought‑based sleep detector** (HR + steps + clock, with HR‑drought and transmission‑resume handling) decides SLEEPING — robust to the sparse overnight HR HealthKit typically provides.
-2. While asleep, **V5 stops overriding the SMB** and the de‑aggressed base dose stands.
+2. While asleep, **V6 stops overriding the SMB** and the de‑aggressed base dose stands.
 3. **Night mode** suppresses SMB on top of that within the night window.
 4. A **SleepHistoryTracker** learns your habitual night window and resting HR over ~28 days (≥7 sessions) and feeds them to the detector; below that threshold it uses the configured values.
 
