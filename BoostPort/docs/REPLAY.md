@@ -118,14 +118,30 @@ python3 BoostPort/sim/fetch_v5shadow.py --days 10
 cd BoostPort/BoostV5Core && swift test --filter V5ShadowReplayTests
 ```
 
-What it validates (golden master, latest run over ~19,196 cycles / 5 users):
+What it validates (golden master, latest run over ~19,196 cycles / 5 users). Two V5 inputs aren't
+in the telemetry — the velocity 30-min rise and the on-device ML risk model — so the harness reports
+*reproduced %* and labels each residual's cause, and for the dose it splits missing-input cycles
+from genuine differences (the number that matters):
 
-| stage | rows | match |
+| stage | rows | reproduced | residual is… |
+|---|---|---|---|
+| action multiplier (per state) | 19,196 | **100.0%** | — (nothing to reconstruct) |
+| iobHeadroom safety brake | 19,196 | **98.4%** | logged `maxIOB` ≠ the gate's input on a few cycles |
+| deceleration safety brake (formula) | 5,691 | **96.5%** | `deltaAccl` logged at 1–2 dp (formula exact) |
+| final SMB dose, uncapped states | 12,314 | **97.0%** | velocity rise + ML brake (decomposed below) |
+
+`final SMB dose` decomposition (printed by the test):
+
+| | share | meaning |
 |---|---|---|
-| action multiplier (per state) | 19,196 | **100.0%** |
-| iobHeadroom safety brake | 19,196 | **98.4%** |
-| deceleration safety brake (formula) | 5,691 | **96.5%** (residual = logged-deltaAccl rounding) |
-| final SMB dose, uncapped states | 12,314 | **90.1%** (residual = velocity-factor reconstruction) |
+| exact (velocity factor 1.0) | 71.8% | reproduced outright |
+| velocity-reconciled ∈ [0.4, 1.0] | 25.2% | the 30-min rise that sets the factor isn't logged |
+| ML hypo-risk brake | 3.0% | device dosed **less**; needs the on-device ML model (all carry ML risk) |
+| **genuine port-vs-reference difference** | **0.0%** | — |
+
+The test asserts the reproduced fraction ≥ 95% **and** genuine differences ≤ 1% (currently 0%), so a
+real dosing divergence would fail the suite rather than hide inside a "match %". Every residual is a
+missing offline input, and all are in the safe direction (device dosed less, never the port more).
 
 **What it CANNOT validate from this telemetry (reported as diagnostics, not asserted):**
 - **The HARD min-guard gate** (4,841 cycles) — the V5 gate's true min-guard input is internal; the
