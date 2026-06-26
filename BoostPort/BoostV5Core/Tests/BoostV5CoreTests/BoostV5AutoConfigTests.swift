@@ -51,6 +51,9 @@ final class BoostV5AutoConfigTests: XCTestCase {
         XCTAssertLessThanOrEqual(s.confirmedCapU, 7.5)
         XCTAssertGreaterThanOrEqual(s.committedCapU, 0.25)
         XCTAssertLessThanOrEqual(s.committedCapU, 2.5)
+        XCTAssertGreaterThanOrEqual(s.cumulativeSmbCap60MinU, 1.0)
+        XCTAssertLessThanOrEqual(s.cumulativeSmbCap60MinU, 5.0)
+        XCTAssertGreaterThanOrEqual(s.cumulativeSmbCap60MinU, s.confirmedCapU - 1E-9)
     }
 
     func testConfirmedCapCoversBigMealUser() {
