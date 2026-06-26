@@ -1,4 +1,3 @@
-import BoostV5Core
 import Combine
 import CoreData
 import Foundation
@@ -1026,13 +1025,14 @@ final class BaseAPSManager: APSManager, Injectable {
             let tbr70 = 100.0 * Double(values.filter { $0 < 70 }.count) / Double(n)
             let sev54 = 100.0 * Double(values.filter { $0 < 54 }.count) / Double(n)
             let meanBg = Double(values.reduce(0, +)) / Double(n)
-            let firstDate = glucose.compactMap { $0.date }.min() ?? since
+            let firstDate = glucose.compactMap(\.date).min() ?? since
             let daysWithData = max(1, Int(Date().timeIntervalSince(firstDate) / 86400))
 
             // Boluses (last 14 days), split into SMB vs manual.
             let history = (try? await pumpHistoryStorage.getPumpHistory()) ?? []
-            let recent = history.filter { ($0.timestamp ) >= since && ($0.type == .bolus || $0.type == .smb) }
-            func amt(_ e: PumpHistoryEvent) -> Double? { e.amount.map { Double(truncating: $0 as NSNumber) }.flatMap { $0 > 0 ? $0 : nil } }
+            let recent = history.filter { ($0.timestamp) >= since && ($0.type == .bolus || $0.type == .smb) }
+            func amt(_ e: PumpHistoryEvent) -> Double? { e.amount.map { Double(truncating: $0 as NSNumber) }
+                .flatMap { $0 > 0 ? $0 : nil } }
             let smb = recent.filter { $0.isSMB == true || $0.type == .smb }.compactMap(amt)
             let manual = recent.filter { !($0.isSMB == true || $0.type == .smb) }.compactMap(amt)
             // Bolus-only daily total estimate (conservative; used only as the committed-cap floor).
