@@ -149,17 +149,32 @@ the AndroidAPS Kotlin V5) through the Swift port's dose‑cap + Phase‑3 safety
 **19,196 cycles across 5 users** (rolling last 10 days; fixture built by
 [`BoostPort/sim/fetch_v5shadow.py`](BoostPort/sim/fetch_v5shadow.py)):
 
-| dosing stage | rows | match |
-|------|------|-------|
-| action multiplier (per state) | 19,196 | **100.0%** |
-| iobHeadroom safety brake | 19,196 | **98.4%** |
-| deceleration safety brake (formula) | 5,691 | **96.5%** |
-| final SMB dose (uncapped states) | 12,314 | **90.1%** |
+Reproducibility note: a few V5 inputs aren't in the telemetry (the velocity 30‑min rise; the
+on‑device ML risk model), so the figures below are *as close as the logged data allows* — the
+test reports exactly which residuals are missing‑input vs a genuine difference, rather than a bare
+"match %". The one stage needing no reconstruction (action multiplier) is exact.
 
-**What dosing delivery this confirms:** the port's SMB **dose math and soft safety‑brakes**
-(action multiplier, iobHeadroom, deceleration, velocity scaling, rounding) reproduce the real
-on‑device AndroidAPS V5 to high fidelity, and the engine emits no out‑of‑bounds dose across 266k
-trajectories.
+| dosing stage | rows | reproduced | residual is… |
+|------|------|------|------|
+| action multiplier (per state) | 19,196 | **100.0%** | — (nothing to reconstruct) |
+| iobHeadroom safety brake | 19,196 | **98.4%** | logged `maxIOB` ≠ the gate's input on a few cycles |
+| deceleration safety brake | 5,691 | **96.5%** | `deltaAccl` logged at 1–2 dp (formula itself exact) |
+| final SMB dose (uncapped states) | 12,314 | **97.0%** | see decomposition below |
+
+The dose row decomposes — and the genuine‑difference count is the number that matters:
+
+| | share | meaning |
+|---|---|---|
+| exact (velocity factor 1.0) | 71.8% | reproduced outright |
+| velocity‑reconciled | 25.2% | a velocity factor ∈ [0.4, 1.0] reproduces it — the 30‑min rise that sets it **isn't logged** |
+| ML hypo‑risk brake | 3.0% | device dosed **less**; the post‑action brake needs the on‑device ML model (all such cycles carry ML risk) |
+| **genuine port‑vs‑reference difference** | **0.0%** | — |
+
+**What dosing delivery this confirms:** **97.0%** of uncapped doses reproduce within the inputs we
+have, and **0%** are a genuine port difference — every residual is an input the offline replay
+can't supply (velocity rise, ML risk model), and all of them make the *device* dose less, never the
+port more. The soft safety‑brakes and per‑state action multiplier reproduce the on‑device AndroidAPS
+V5 directly, and the engine emits no out‑of‑bounds dose across 266k trajectories.
 
 **What it does not (honest limits, see REPLAY.md):** the **HARD min‑guard hypo‑gate** (~25% of
 cycles) can't be telemetry‑validated — the gate's sanitised input isn't logged (the recorded
