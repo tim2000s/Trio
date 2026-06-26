@@ -105,6 +105,11 @@ The sleep detector is advanced on the loop cadence (not only on HealthKit callba
 
 ## Testing
 
+Two layers: deterministic **unit tests** of the pure core, and **backtests** that replay the port
+over large volumes of real captured data and golden‑master it against the AndroidAPS reference.
+
+### Unit tests
+
 `BoostV5Core` ships ~190 unit tests (state machine, gates, DynISF, ML feature builder + ring buffer, sleep detector, history tracker, night mode). Run them with:
 
 ```sh
@@ -113,8 +118,59 @@ cd BoostPort/BoostV5Core && swift test
 
 The full app is built with `xcodebuild` against the Trio workspace as usual.
 
+### Backtests against real captured data
+
+The port is replayed locally over real device data and checked, cycle‑by‑cycle, against what the
+AndroidAPS Boost reference actually computed. Volume matters here — these run over **hundreds of
+thousands of real cycles across multiple users**, not synthetic fixtures. All run via `swift test`;
+fixtures are gitignored (real glucose/insulin data) and the suites `XCTSkip` cleanly without them.
+Full method, results and limits: [`BoostPort/docs/REPLAY.md`](BoostPort/docs/REPLAY.md).
+
+**1. DynISF golden master** (`Tests/BoostV5CoreTests/Replay/DynIsfReplayTests.swift`) — replays the
+DynISF/`future_sens` maths over **266,323 cycles across 7 users** (Feb–Jun 2026) captured from the
+AndroidAPS **Boost v4.1.5** reference (`boost_decisions` in the local TimescaleDB, exported by
+[`BoostPort/sim/export_boost_decisions.sh`](BoostPort/sim/export_boost_decisions.sh)). Per‑profile
+divisor fit; out‑of‑scope variants (v4.2–v4.4.2, v3) detected and excluded:
+
+| check | rows | match |
+|------|------|-------|
+| `variableSens` (end‑to‑end ISF) | 129,063 | **99.97%** |
+| `isfTargetV1 × globalScale` | 135,147 | **99.97%** |
+| `blendedTdd` / `finalTdd` | 136,947 | **99.78%** |
+| `deltaAccl` | 38,021 | **100.0%** |
+
+**2. Engine robustness** (`BoostEngineReplayTests.swift`) — drives the full V5 state machine over the
+same **266,323 real glucose trajectories** (per‑user timelines): **0 violations** — no NaN/inf, no
+negative dose, none over maxIOB.
+
+**3. Dosing‑delivery golden master** (`V5ShadowReplayTests.swift`) — the dosing‑path check. Replays
+the **on‑device V5 shadow** (`openaps.suggested.boostV5_*` in Nightscout deviceStatus, produced by
+the AndroidAPS Kotlin V5) through the Swift port's dose‑cap + Phase‑3 safety‑gate stages over
+**19,196 cycles across 5 users** (rolling last 10 days; fixture built by
+[`BoostPort/sim/fetch_v5shadow.py`](BoostPort/sim/fetch_v5shadow.py)):
+
+| dosing stage | rows | match |
+|------|------|-------|
+| action multiplier (per state) | 19,196 | **100.0%** |
+| iobHeadroom safety brake | 19,196 | **98.4%** |
+| deceleration safety brake (formula) | 5,691 | **96.5%** |
+| final SMB dose (uncapped states) | 12,314 | **90.1%** |
+
+**What dosing delivery this confirms:** the port's SMB **dose math and soft safety‑brakes**
+(action multiplier, iobHeadroom, deceleration, velocity scaling, rounding) reproduce the real
+on‑device AndroidAPS V5 to high fidelity, and the engine emits no out‑of‑bounds dose across 266k
+trajectories.
+
+**What it does not (honest limits, see REPLAY.md):** the **HARD min‑guard hypo‑gate** (~25% of
+cycles) can't be telemetry‑validated — the gate's sanitised input isn't logged (the recorded
+`minGuardBG` is oref's raw, unbounded value); and **CONFIRMED/COMMITTED dose caps** are a
+configurable Trio setting the shadow doesn't apply, so the capped value isn't reproduced. Closing
+both needs a few extra fields in the on‑device shadow log, or Trio's own Shadow mode to emit
+`boostV5_*` for a like‑for‑like compare.
+
 **Records:**
-- [`BoostPort/docs/TESTS.md`](BoostPort/docs/TESTS.md) — per-suite test results (193 tests, 0 failures).
+- [`BoostPort/docs/REPLAY.md`](BoostPort/docs/REPLAY.md) — backtest method, results, and scope/limits.
+- [`BoostPort/docs/TESTS.md`](BoostPort/docs/TESTS.md) — per-suite unit-test results (193 tests, 0 failures).
 - [`BoostPort/docs/AUDIT.md`](BoostPort/docs/AUDIT.md) — the adversarial audit passes, findings by severity, and the final verdict.
 
 ## Credits & licence
