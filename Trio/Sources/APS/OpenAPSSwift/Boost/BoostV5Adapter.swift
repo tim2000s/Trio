@@ -42,8 +42,8 @@ enum BoostV5Adapter {
         var aggression: Double = 1.0
         var hypoCaution: Double = 1.0
         var sensitivity: Double = 1.0
-        var confirmedCapU: Double = 1.0
-        var committedCapU: Double = 0.25
+        var confirmedCapU: Double = 2.5   // fallback; host normally passes preferences.boostV5ConfirmedCapU
+        var committedCapU: Double = 0.5   // fallback; host normally passes preferences.boostV5CommittedCapU
         var fastCarbConfirm: Bool = true
     }
 

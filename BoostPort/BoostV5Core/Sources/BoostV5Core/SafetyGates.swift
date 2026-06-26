@@ -16,9 +16,11 @@ public enum SafetyGateConstants {
     public static let postActionRiskFloor = 0.30
     public static let sensorQualityBadScale = 0.7
     public static let dynamicSpikeCapMultiplier = 2.5
-    // Fix-6 dose calibration
-    public static let maxConfirmedCommitDoseU = 1.0
-    public static let maxCommittedDoseU = 0.25
+    // Dose-cap fallbacks (only used if the host preference is unset; the Trio adapter normally
+    // passes the user's boostV5ConfirmedCapU/CommittedCapU through). 2026-06-26: aligned to the
+    // AAPS defaults (2.5 / 0.5) so an unset-preference path can't revert to the old conservative caps.
+    public static let maxConfirmedCommitDoseU = 2.5
+    public static let maxCommittedDoseU = 0.5
     public static let velocityRiseLoMgdl = 25.0
     public static let velocityRiseHiMgdl = 50.0
     public static let velocityScaleFloor = 0.40
