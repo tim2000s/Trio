@@ -98,9 +98,11 @@ public enum BoostV5AutoConfig {
         reasons.append("Committed cap \(committedCapU)U (≈ your routine SMB size)")
 
         // Rolling-60-min cumulative SMB cap: bounds dose *frequency* (per-shot caps only bound
-        // magnitude). ~one confirm shot plus a couple of holds per hour. (No Trio engine knob yet —
-        // shared output; the host writes it where the setting exists.)
-        let cumulativeSmbCap60MinU = round1(min(max(confirmedCapU + 2.0 * committedCapU, 1.0), 5.0))
+        // magnitude). ~one confirm shot plus a couple of holds per hour. Upper bound is at least
+        // confirmedCapU so the hourly budget can never sit BELOW a single confirmed shot for a
+        // big-meal user. (Review 2026-06-26, LOW correctness.) (No Trio engine knob yet — shared
+        // output; the host writes it where the setting exists.)
+        let cumulativeSmbCap60MinU = round1(min(max(confirmedCapU + 2.0 * committedCapU, 1.0), max(5.0, confirmedCapU)))
         reasons.append("Cumulative SMB cap/60min \(cumulativeSmbCap60MinU)U (limits dose frequency)")
 
         let maxIobU = round1(min(max(p.currentMaxIobU, 0.1), 12.0))
