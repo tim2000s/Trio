@@ -36,8 +36,8 @@ final class BoostV5EngineTests: XCTestCase {
         XCTAssertEqual(d.mealHypothesis, .idle)
     }
 
-    func testConfirmedCommitIsCappedAtOneUnit() {
-        // Fast-carb path → CONFIRMED with a large baseInsulinReq; the 1.0U CONFIRMED cap must bind.
+    func testConfirmedCommitIsCapped() {
+        // Fast-carb path → CONFIRMED with a large baseInsulinReq; the CONFIRMED dose cap must bind.
         let i = baseInputs(
             state: MealHypothesisState(),
             delta: 12,
