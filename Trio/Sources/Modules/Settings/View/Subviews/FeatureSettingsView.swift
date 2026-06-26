@@ -47,9 +47,9 @@ struct FeatureSettingsView: BaseView {
             .listRowBackground(Color.chart)
 
             Section(
-                header: Text("Boost (V5)"),
+                header: Text("Boost (V6)"),
                 footer: Text(
-                    "Off: stock Trio only. Shadow: runs the Boost V5 engine and logs what it would dose (in the determination reason) without changing dosing. Active: Boost V5 drives the SMB."
+                    "Off: stock Trio only. Shadow: runs the Boost V6 engine and logs what it would dose (in the determination reason) without changing dosing. Active: Boost V6 drives the SMB."
                 ),
                 content: {
                     Picker("Boost Mode", selection: $state.boostMode) {
@@ -62,7 +62,7 @@ struct FeatureSettingsView: BaseView {
             .listRowBackground(Color.chart)
 
             if state.boostMode != .off {
-                Section(header: Text("Boost V5 Tuning")) {
+                Section(header: Text("Boost V6 Tuning")) {
                     boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.3, step: 0.05)
                     boostSlider("Hypo Caution", $state.boostV5HypoCaution, in: 1.0 ... 2.0, step: 0.05)
                     boostSlider("Sensitivity", $state.boostV5Sensitivity, in: 0.8 ... 1.2, step: 0.05)
