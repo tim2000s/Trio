@@ -68,6 +68,13 @@ struct Preferences: JSON, Equatable {
     var boostV5ConfirmedCapU: Decimal = 2.5 // 0…7.5 U
     var boostV5CommittedCapU: Decimal = 0.5 // 0…2.5 U
     var boostV5FastCarbConfirm: Bool = true
+    // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
+    // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
+    // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
+    // raise a cap for a genuine new user yet never override a value the user deliberately set (even
+    // to the default). Not user-facing.
+    var boostV5ConfirmedCapUUserSet: Bool = false
+    var boostV5CommittedCapUUserSet: Bool = false
     // Internal one-shot flag: set true once the V5 knobs have been auto-configured from the user's
     // prior (oref) dosing history on first switch to boostMode == .active. Not user-facing.
     var boostV5AutoConfigDone: Bool = false
@@ -168,6 +175,8 @@ extension Preferences {
         case boostV5ConfirmedCapU
         case boostV5CommittedCapU
         case boostV5FastCarbConfirm
+        case boostV5ConfirmedCapUUserSet
+        case boostV5CommittedCapUUserSet
         case boostV5AutoConfigDone
         case boostNightModeEnabled
         case boostNightModeStartHour
@@ -461,6 +470,14 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5CommittedCapU) {
             preferences.boostV5CommittedCapU = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5ConfirmedCapUUserSet) {
+            preferences.boostV5ConfirmedCapUUserSet = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5CommittedCapUUserSet) {
+            preferences.boostV5CommittedCapUUserSet = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {

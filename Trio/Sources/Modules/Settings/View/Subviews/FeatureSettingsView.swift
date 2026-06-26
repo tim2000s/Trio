@@ -65,8 +65,12 @@ struct FeatureSettingsView: BaseView {
                     boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.3, step: 0.05)
                     boostSlider("Hypo Caution", $state.boostV5HypoCaution, in: 1.0 ... 2.0, step: 0.05)
                     boostSlider("Sensitivity", $state.boostV5Sensitivity, in: 0.8 ... 1.2, step: 0.05)
-                    boostSlider("Confirmed cap (U)", $state.boostV5ConfirmedCapU, in: 0 ... 7.5, step: 0.05)
-                    boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 2.5, step: 0.05)
+                    boostSlider("Confirmed cap (U)", $state.boostV5ConfirmedCapU, in: 0 ... 7.5, step: 0.05) {
+                        state.markBoostV5ConfirmedCapUserSet()
+                    }
+                    boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 2.5, step: 0.05) {
+                        state.markBoostV5CommittedCapUserSet()
+                    }
                     Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
                 }
                 .listRowBackground(Color.chart)
@@ -174,7 +178,8 @@ struct FeatureSettingsView: BaseView {
         _ title: String,
         _ value: Binding<Decimal>,
         in range: ClosedRange<Double>,
-        step: Double
+        step: Double,
+        onUserEdit: (() -> Void)? = nil
     ) -> some View {
         VStack(alignment: .leading) {
             HStack {
@@ -189,7 +194,12 @@ struct FeatureSettingsView: BaseView {
                     set: { value.wrappedValue = Decimal($0) }
                 ),
                 in: range,
-                step: step
+                step: step,
+                onEditingChanged: { editing in
+                    // Fires only on genuine user interaction (drag start/end), never programmatically —
+                    // the right place to flag a knob as user-set. Mark on release.
+                    if !editing { onUserEdit?() }
+                }
             )
         }
     }
