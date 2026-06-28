@@ -29,67 +29,73 @@ final class BoostEngineReplayTests: XCTestCase {
 
         // Replay each user's timeline independently — meal-hypothesis state must never cross users.
         for (_, cycles) in byUser {
-        let rows = cycles.filter { $0.tsEpoch != nil }
-        guard rows.count > 200 else { continue }
-        var persisted = V5PersistedState()
-        var bgHistory: [Double] = []      // most-recent last
-        var deltaHistory: [Double] = []   // most-recent last
-        var prevEpoch: Double?
+            let rows = cycles.filter { $0.tsEpoch != nil }
+            guard rows.count > 200 else { continue }
+            var persisted = V5PersistedState()
+            var bgHistory: [Double] = [] // most-recent last
+            var deltaHistory: [Double] = [] // most-recent last
+            var prevEpoch: Double?
 
-        for row in rows {
-            totalCycles += 1
-            let bg = row.cgmMgdl
-            let epoch = row.tsEpoch!
+            for row in rows {
+                totalCycles += 1
+                let bg = row.cgmMgdl
+                let epoch = row.tsEpoch!
 
-            // Derive the glucose-status inputs from the actual CGM sequence (5-min cadence).
-            let delta = bgHistory.last.map { bg - $0 } ?? 0
-            let recentDeltas = (deltaHistory + [delta]).suffix(5)
-            let shortAvgDelta = recentDeltas.suffix(3).reduce(0, +) / Double(max(recentDeltas.suffix(3).count, 1))
-            let deltaAccl = DynIsf.deltaAccl(delta: delta, shortAvgDelta: shortAvgDelta)
-            let maxDelta = recentDeltas.max() ?? delta
-            let cumulativeRise30min = max(0, (deltaHistory + [delta]).suffix(6).reduce(0, +))
-            let recentLowBg = (bgHistory + [bg]).suffix(12).min() ?? bg
+                // Derive the glucose-status inputs from the actual CGM sequence (5-min cadence).
+                let delta = bgHistory.last.map { bg - $0 } ?? 0
+                let recentDeltas = (deltaHistory + [delta]).suffix(5)
+                let shortAvgDelta = recentDeltas.suffix(3).reduce(0, +) / Double(max(recentDeltas.suffix(3).count, 1))
+                let deltaAccl = DynIsf.deltaAccl(delta: delta, shortAvgDelta: shortAvgDelta)
+                let maxDelta = recentDeltas.max() ?? delta
+                let cumulativeRise30min = max(0, (deltaHistory + [delta]).suffix(6).reduce(0, +))
+                let recentLowBg = (bgHistory + [bg]).suffix(12).min() ?? bg
 
-            let iob = row.iobIob ?? 0
-            let target = normalizedMgdl(row.sugCurrentTarget) ?? 100
-            let eventualBg = normalizedMgdl(row.sugEventualbg) ?? (bg + shortAvgDelta * 12)
-            let minGuardBg = normalizedMgdl(row.reasonMinguardbg) ?? recentLowBg
-            let baseInsulinReq = max(0, row.sugInsulinreq ?? 0.3)
-            let timeJump = prevEpoch.map { (epoch - $0) / 60.0 } ?? 0
+                let iob = row.iobIob ?? 0
+                let target = normalizedMgdl(row.sugCurrentTarget) ?? 100
+                let eventualBg = normalizedMgdl(row.sugEventualbg) ?? (bg + shortAvgDelta * 12)
+                let minGuardBg = normalizedMgdl(row.reasonMinguardbg) ?? recentLowBg
+                let baseInsulinReq = max(0, row.sugInsulinreq ?? 0.3)
+                let timeJump = prevEpoch.map { (epoch - $0) / 60.0 } ?? 0
 
-            let inputs = V5Inputs(
-                delta: delta, shortAvgDelta: shortAvgDelta, deltaAccl: deltaAccl, bg: bg,
-                eventualBg: eventualBg, targetBg: target, maxDelta: maxDelta,
-                minGuardBg: minGuardBg, minGuardThreshold: 70,
-                deltaHistory: Array(recentDeltas), iob: iob, maxIob: maxIob,
-                baseInsulinReq: baseInsulinReq, roundSmbTo: 0.05, enableSmbPreChecks: true,
-                recentLowBg: recentLowBg, cumulativeRise30min: cumulativeRise30min,
-                hour: hourOfDay(epoch), exerciseActive: false, inPostExerciseWindow: false,
-                timeJumpMinutes: timeJump
-            )
+                let inputs = V5Inputs(
+                    delta: delta, shortAvgDelta: shortAvgDelta, deltaAccl: deltaAccl, bg: bg,
+                    eventualBg: eventualBg, targetBg: target, maxDelta: maxDelta,
+                    minGuardBg: minGuardBg, minGuardThreshold: 70,
+                    deltaHistory: Array(recentDeltas), iob: iob, maxIob: maxIob,
+                    baseInsulinReq: baseInsulinReq, roundSmbTo: 0.05, enableSmbPreChecks: true,
+                    recentLowBg: recentLowBg, cumulativeRise30min: cumulativeRise30min,
+                    hour: hourOfDay(epoch), exerciseActive: false, inPostExerciseWindow: false,
+                    timeJumpMinutes: timeJump
+                )
 
-            let decision = BoostV5Engine.decide(inputs, persisted: persisted)
-            persisted = decision.newPersistedState
+                let decision = BoostV5Engine.decide(inputs, persisted: persisted)
+                persisted = decision.newPersistedState
 
-            // Robustness invariants.
-            for v in [decision.finalDose, decision.insulinToDeliver, decision.score] {
-                if !v.isFinite { nonFinite += 1 }
+                // Robustness invariants.
+                for v in [decision.finalDose, decision.insulinToDeliver, decision.score] {
+                    if !v.isFinite { nonFinite += 1 }
+                }
+                if decision.finalDose < 0 { negative += 1 }
+                if decision.finalDose > maxIob + 1E-6 { overMaxIob += 1 }
+
+                stateCounts[decision.mealHypothesis, default: 0] += 1
+                if decision.finalDose > 0 { dosed += 1
+                    doseSum += decision.finalDose
+                    doseMax = max(doseMax, decision.finalDose) }
+
+                bgHistory.append(bg)
+                if bgHistory.count > 16 { bgHistory.removeFirst() }
+                deltaHistory.append(delta)
+                if deltaHistory.count > 8 { deltaHistory.removeFirst() }
+                prevEpoch = epoch
             }
-            if decision.finalDose < 0 { negative += 1 }
-            if decision.finalDose > maxIob + 1e-6 { overMaxIob += 1 }
-
-            stateCounts[decision.mealHypothesis, default: 0] += 1
-            if decision.finalDose > 0 { dosed += 1; doseSum += decision.finalDose; doseMax = max(doseMax, decision.finalDose) }
-
-            bgHistory.append(bg); if bgHistory.count > 16 { bgHistory.removeFirst() }
-            deltaHistory.append(delta); if deltaHistory.count > 8 { deltaHistory.removeFirst() }
-            prevEpoch = epoch
-        }
-        }   // end per-user loop
+        } // end per-user loop
 
         // Report.
         print("── V5 engine robustness replay (per-user timelines) ───────────────────────────────")
-        print("   users=\(byUser.count)  cycles=\(totalCycles)  dosed=\(dosed)  meanDose=\(dosed > 0 ? doseSum / Double(dosed) : 0)  maxDose=\(doseMax)")
+        print(
+            "   users=\(byUser.count)  cycles=\(totalCycles)  dosed=\(dosed)  meanDose=\(dosed > 0 ? doseSum / Double(dosed) : 0)  maxDose=\(doseMax)"
+        )
         print("   state distribution:")
         for s in stateCounts.keys.sorted(by: { "\($0)" < "\($1)" }) {
             print("     \(s): \(stateCounts[s]!)")

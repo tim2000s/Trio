@@ -45,8 +45,16 @@ struct ReplayReport {
     func printSummary() {
         print("── Replay: \(name) ───────────────────────────────")
         let relStr = relTolerance > 0 ? String(format: " (or %.1f%%)", relTolerance * 100) : ""
-        print(String(format: "   checked=%d  matched=%d (%.3f%%)  tol=±%g%@  meanErr=%.4f  worstErr=%.4f",
-                     checked, matched, matchFraction * 100, tolerance, relStr, meanErr, worstErr))
+        print(String(
+            format: "   checked=%d  matched=%d (%.3f%%)  tol=±%g%@  meanErr=%.4f  worstErr=%.4f",
+            checked,
+            matched,
+            matchFraction * 100,
+            tolerance,
+            relStr,
+            meanErr,
+            worstErr
+        ))
         if failures > 0 {
             var top = worstSamples
             top.sort { $0.err > $1.err }
