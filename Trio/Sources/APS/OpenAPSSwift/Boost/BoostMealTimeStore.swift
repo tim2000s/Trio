@@ -30,7 +30,26 @@ final class BoostMealTimeStore: @unchecked Sendable {
     }
 
     /// Record a fresh CONFIRMED commit at `clock` (trims to the learner's window).
+    /// Uses the atomic mutate helper so the append-and-trim is a single locked read-modify-write —
+    /// composing the locked getter and setter would leave a window where a concurrent recordConfirmed
+    /// (scheduled loop vs post-bolus determineBasalSync) drops a committed meal-time event.
     func recordConfirmed(at clock: Date) {
-        history = MealTimeLearner.record(history, tsMs: clock.timeIntervalSince1970 * 1000.0)
+        mutateHistory { $0 = MealTimeLearner.record($0, tsMs: clock.timeIntervalSince1970 * 1000.0) }
+    }
+
+    /// Atomically load → mutate → save the meal-time history under a single critical section.
+    private func mutateHistory(_ body: (inout MealTimeHistory) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        var h: MealTimeHistory
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode(MealTimeHistory.self, from: data)
+        {
+            h = decoded
+        } else {
+            h = MealTimeHistory()
+        }
+        body(&h)
+        if let data = try? JSONEncoder().encode(h) { defaults.set(data, forKey: key) }
     }
 }

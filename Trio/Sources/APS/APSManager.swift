@@ -772,7 +772,12 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func performBolus(pump: PumpManager, smbToDeliver: NSDecimalNumber) async throws {
-        try await pump.enactBolus(units: Double(truncating: smbToDeliver), automatic: true)
+        // Safety clamp: an automatic SMB must never exceed the user's configured Max Bolus, mirroring
+        // the manual path (roundBolus). Guards against an over-large determination (e.g. a Boost
+        // override) reaching the pump unclamped.
+        let maxBolus = pump.roundToSupportedBolusVolume(units: Double(settingsManager.pumpSettings.maxBolus))
+        let requested = pump.roundToSupportedBolusVolume(units: Double(truncating: smbToDeliver))
+        try await pump.enactBolus(units: min(requested, maxBolus), automatic: true)
         bolusProgress.send(0)
     }
 
