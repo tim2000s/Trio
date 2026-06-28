@@ -212,6 +212,126 @@ public enum ActivityLoadTracker {
         return Const.activityMaxIsfPct * f
     }
 
+    // MARK: - Multi-source history + scaled bridging (2026-06-28)
+
+    // Keeps a SEPARATE daily history per step source so that when the user's primary device changes,
+    // the old source's days BRIDGE the new source's empty window — rolling-window coverage is never
+    // lost to a device switch (no warmup reset). Cross-source absolute-count differences are
+    // reconciled by overlap calibration so the deviation ratio stays honest (an Apple Watch logging
+    // ~14k/day and an iPhone logging ~9k/day for the same activity must not read as a 36% drop).
+    // `StepSourceResolver` owns today's-count selection. Port of the Kotlin additions.
+
+    /// Days where two sources both recorded, required before an overlap calibration is trusted.
+    public static let minOverlapDays = 3
+
+    /// Per-source daily histories, keyed by canonical source id (see `StepSourceResolver.canonical`).
+    public struct MultiSourceHistory: Codable, Equatable, Sendable {
+        public var sources: [String: StepHistory]
+        public init(sources: [String: StepHistory] = [:]) { self.sources = sources }
+    }
+
+    /// Merge completed-day `totals` into a source's own history within the window. Today
+    /// (`dayIndex >= todayIndex`) is excluded as partial. Mirrors Kotlin `merge(...)`.
+    public static func merge(
+        _ h: StepHistory,
+        totals: [DailyStepTotal],
+        todayIndex: Int,
+        windowDays: Int = Const.windowDays
+    ) -> StepHistory {
+        var map: [Int: DailyStepTotal] = [:]
+        for d in h.days { map[d.dayIndex] = d }
+        for t in totals where t.dayIndex >= (todayIndex - windowDays) && t.dayIndex < todayIndex {
+            map[t.dayIndex] = t
+        }
+        let cutoff = todayIndex - windowDays
+        let kept = map.values.filter { $0.dayIndex >= cutoff }.sorted { $0.dayIndex < $1.dayIndex }
+        return StepHistory(days: kept)
+    }
+
+    /// Merge completed-day `totals` into `source`'s own history within `multi`; prunes empty sources.
+    public static func mergeSource(
+        _ multi: MultiSourceHistory,
+        source: String,
+        totals: [DailyStepTotal],
+        todayIndex: Int
+    ) -> MultiSourceHistory {
+        let src = StepSourceResolver.canonical(source)
+        var sources = multi.sources
+        let canonTotals = totals.map { DailyStepTotal(dayIndex: $0.dayIndex, steps: $0.steps, source: src) }
+        sources[src] = merge(sources[src] ?? StepHistory(), totals: canonTotals, todayIndex: todayIndex)
+        sources = sources.filter { !$0.value.days.isEmpty }
+        return MultiSourceHistory(sources: sources)
+    }
+
+    /// Factor to express `donor`'s counts in `active`'s units: median over days where BOTH recorded of
+    /// (active.steps / donor.steps). Nil when fewer than `minOverlapDays` overlapping days exist.
+    public static func calibration(active: StepHistory, donor: StepHistory) -> Double? {
+        var ratios: [Double] = []
+        for a in active.days {
+            if let d = donor.steps(forDay: a.dayIndex), a.steps > 0, d > 0 {
+                ratios.append(Double(a.steps) / Double(d))
+            }
+        }
+        if ratios.count < minOverlapDays { return nil }
+        ratios.sort()
+        return ratios[ratios.count / 2]
+    }
+
+    public struct BridgeResult: Equatable, Sendable {
+        public var history: StepHistory
+        public var calibrated: Bool
+        public var donorsUsed: [String]
+    }
+
+    /// Build one rolling-window history in `activeSource`'s units for `todayIndex`: use the active
+    /// source's value for each day it has, else borrow the highest-trust OTHER source's day scaled
+    /// into active units. Guarantees coverage across a device switch. `calibrated` is false if any
+    /// borrowed donor lacked enough overlap to scale (those days used raw). Mirrors Kotlin `bridgedWindow`.
+    public static func bridgedWindow(
+        _ multi: MultiSourceHistory,
+        activeSource: String?,
+        todayIndex: Int,
+        windowDays: Int = Const.windowDays
+    ) -> BridgeResult {
+        let activeKey = activeSource.map { StepSourceResolver.canonical($0) }
+        let active = activeKey.flatMap { multi.sources[$0] } ?? StepHistory()
+        let donors = multi.sources
+            .filter { $0.key != activeKey }
+            .sorted { StepSourceResolver.tier($0.key) < StepSourceResolver.tier($1.key) }
+
+        var out: [Int: DailyStepTotal] = [:]
+        for d in active.days { out[d.dayIndex] = d }
+        var cals: [String: Double?] = [:]
+        var donorsUsed: [String] = []
+        var anyUncalibrated = false
+
+        for day in (todayIndex - windowDays) ..< todayIndex where out[day] == nil {
+            for donor in donors {
+                guard let dt = donor.value.steps(forDay: day) else { continue }
+                let cal: Double?
+                if cals.keys.contains(donor.key) {
+                    cal = cals[donor.key]!
+                } else {
+                    cal = calibration(active: active, donor: donor.value)
+                    cals[donor.key] = cal
+                }
+                let scaled: Int
+                if let cal {
+                    scaled = Int(Double(dt) * cal)
+                } else {
+                    anyUncalibrated = true
+                    scaled = dt
+                }
+                out[day] = DailyStepTotal(dayIndex: day, steps: scaled, source: donor.key)
+                if !donorsUsed.contains(donor.key) { donorsUsed.append(donor.key) }
+                break
+            }
+        }
+
+        let hist = StepHistory(days: out.values.sorted { $0.dayIndex < $1.dayIndex })
+        return BridgeResult(history: hist, calibrated: !anyUncalibrated, donorsUsed: donorsUsed)
+    }
+
     // MARK: - Helpers
 
     /// Matches Kotlin `coerceIn(0.0, 1.0)`.
