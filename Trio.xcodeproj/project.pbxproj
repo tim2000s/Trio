@@ -564,6 +564,8 @@
 		C2BA6B992F758E7600348E6A /* NotificationIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */; };
 		C2BA6B9A2F7593C300348E6A /* NotificationIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2BA6B982F758E7600348E6A /* NotificationIdentifiers.swift */; };
 		C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990EDF122666600B079D37AB /* ActivityLoadTracker.swift */; };
+		B0057E5A57E50000000000F2 /* StepSourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057E5A57E50000000000F1 /* StepSourceResolver.swift */; };
+		B0057E5A57E50000000000F4 /* HrSourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057E5A57E50000000000F3 /* HrSourceResolver.swift */; };
 		B0057EA1FEA70000000000B1 /* BoostMlFeatureBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057EA1FEA70000000000B2 /* BoostMlFeatureBuilder.swift */; };
 		B0057EA1FEA70000000000C1 /* SleepHistoryTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */; };
 		C967DACD3B1E638F8B43BE06 /* ManualTempBasalStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFCFE0781F9074C2917890E8 /* ManualTempBasalStateModel.swift */; };
@@ -1380,6 +1382,8 @@
 		9455FA2D92E77A6C4AFED8A3 /* HistoryStateModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HistoryStateModel.swift; sourceTree = "<group>"; };
 		96653287EDB276A111288305 /* ManualTempBasalDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ManualTempBasalDataFlow.swift; sourceTree = "<group>"; };
 		990EDF122666600B079D37AB /* ActivityLoadTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ActivityLoadTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/ActivityLoadTracker.swift; sourceTree = "<group>"; };
+		B0057E5A57E50000000000F1 /* StepSourceResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = StepSourceResolver.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/StepSourceResolver.swift; sourceTree = "<group>"; };
+		B0057E5A57E50000000000F3 /* HrSourceResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HrSourceResolver.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/HrSourceResolver.swift; sourceTree = "<group>"; };
 		B0057EA1FEA70000000000B2 /* BoostMlFeatureBuilder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostMlFeatureBuilder.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/BoostMlFeatureBuilder.swift; sourceTree = "<group>"; };
 		B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SleepHistoryTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/SleepHistoryTracker.swift; sourceTree = "<group>"; };
 		9C8D5F457B5AFF763F8CF3DF /* CarbRatioEditorProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorProvider.swift; sourceTree = "<group>"; };
@@ -3131,6 +3135,8 @@
 				B0057EA1FEA70000000000C2 /* SleepHistoryTracker.swift */,
 				C73994E9414A6B02DAD9134C /* IsfShadowEma.swift */,
 				990EDF122666600B079D37AB /* ActivityLoadTracker.swift */,
+				B0057E5A57E50000000000F1 /* StepSourceResolver.swift */,
+				B0057E5A57E50000000000F3 /* HrSourceResolver.swift */,
 				8BE9AF493EAA80F0DFB71B1F /* NightMode.swift */,
 				0842550A7F97F514FF116FCB /* BoostISF.swift */,
 				A2A8C141440C9205A20EC076 /* BoostMealTimeStore.swift */,
@@ -5431,6 +5437,8 @@
 				5572CE5409F2543EA44EE666 /* DynIsf.swift in Sources */,
 				4B4B55F95F14BCCE9AE98F06 /* IsfShadowEma.swift in Sources */,
 				C368679082B041570233FF39 /* ActivityLoadTracker.swift in Sources */,
+				B0057E5A57E50000000000F2 /* StepSourceResolver.swift in Sources */,
+				B0057E5A57E50000000000F4 /* HrSourceResolver.swift in Sources */,
 				B0057EA1FEA70000000000B1 /* BoostMlFeatureBuilder.swift in Sources */,
 				B0057EA1FEA70000000000C1 /* SleepHistoryTracker.swift in Sources */,
 				C0886FDDA1C6418A23A1B383 /* NightMode.swift in Sources */,

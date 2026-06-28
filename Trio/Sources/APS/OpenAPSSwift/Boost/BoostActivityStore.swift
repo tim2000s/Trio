@@ -24,6 +24,18 @@ struct BoostActivitySnapshot: Codable, Sendable {
     var sleepState: SleepDetectorState?
     var recoveryState: RecoveryState?
 
+    // Activity-load source abstraction (2026-06-28, SHADOW telemetry — not applied to dosing).
+    // All optional so older persisted snapshots decode (missing keys → nil).
+    var stepSource: String? = nil // auto-resolved active step source: appleWatch|garmin|hk:x|iphone
+    var stepSourceStates: String? = nil // per-source freshness+coverage, best-trust first: "src(f,Nd)"
+    var activityBaselineSteps: Double? = nil // bridged-window median (in active source's units)
+    var activityRatio: Double? = nil // decay-weighted recent load ÷ baseline
+    var activityWouldDeltaIsfPct: Double? = nil // signed: + raise ISF (activity) / − lower (inactivity)
+    var activityIntradayDeltaIsfPct: Double? = nil // raise-only would-ΔISF from intraday pace
+    var activityBridge: String? = nil // donors bridging the baseline window (+"(raw)" if uncalibrated)
+    var hrSource: String? = nil // live HR source: appleWatch|garmin|hk:x, nil if feed died
+    var hrSourceStates: String? = nil // per-source "src(fresh,count,ageMin)"
+
     var updatedAt: Date
 }
 
