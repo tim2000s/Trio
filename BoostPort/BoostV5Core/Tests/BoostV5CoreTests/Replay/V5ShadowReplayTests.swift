@@ -72,7 +72,6 @@ final class V5ShadowReplayTests: XCTestCase {
         return parts.isEmpty ? "none" : parts.joined(separator: ",")
     }
 
-
     /// Parse the recorded composite gate string into its components.
     private func parseGate(_ s: String) -> (hard: String?, iobHeadroom: Double?, decel: Double?, maxIob: Bool) {
         if s.hasPrefix("HARD:") { return (String(s.dropFirst(5)), nil, nil, false) }
@@ -89,7 +88,7 @@ final class V5ShadowReplayTests: XCTestCase {
         let byUser = try loadByUser()
 
         // Stages whose inputs ARE logged → reproducible to telemetry precision:
-        var actionMult = ReplayReport("actionMultiplier (per state)", tolerance: 1e-6)
+        var actionMult = ReplayReport("actionMultiplier (per state)", tolerance: 1E-6)
         var iobBrake = ReplayReport("iobHeadroom brake", tolerance: 0.005)
         var decelBrake = ReplayReport("deceleration brake", tolerance: 0.02)
         // finalDose (uncapped states): classify how closely the port reproduces the on-device dose.
@@ -105,15 +104,20 @@ final class V5ShadowReplayTests: XCTestCase {
                 let rec = parseGate(c.v5_gateReduction ?? "none")
 
                 // 1) action multiplier — pure function of state.
-                actionMult.record(expected: recActionMult,
-                                  got: MealActionMultiplier.value(for: state, aggressionUserKnob: 1.0),
-                                  ctx: "\(stateStr)")
+                actionMult.record(
+                    expected: recActionMult,
+                    got: MealActionMultiplier.value(for: state, aggressionUserKnob: 1.0),
+                    ctx: "\(stateStr)"
+                )
 
                 // 2) iobHeadroom brake — inputs (IOB, maxIOB) are logged.
                 if let iob = c.iob, let maxIob = c.maxIob, maxIob > 0 {
                     let got = SafetyGates.iobHeadroomBrake(iob, maxIob)
-                    iobBrake.record(expected: rec.iobHeadroom ?? 1.0, got: got,
-                                    ctx: "iob=\(iob) maxIob=\(maxIob)")
+                    iobBrake.record(
+                        expected: rec.iobHeadroom ?? 1.0,
+                        got: got,
+                        ctx: "iob=\(iob) maxIob=\(maxIob)"
+                    )
                 }
 
                 // 3) deceleration brake — VALUE depends only on deltaAccl (logged exactly); the
@@ -122,8 +126,11 @@ final class V5ShadowReplayTests: XCTestCase {
                 // Skip deltaAccl==0: that's the guarded sentinel (shortAvg≈0), not the brake's true
                 // internal input, so it isn't reconstructable from telemetry.
                 if let recDecel = rec.decel, let da = c.deltaAccl, da != 0 {
-                    decelBrake.record(expected: recDecel, got: SafetyGates.decelerationBrake(da, 0.0),
-                                      ctx: "deltaAccl=\(da)")
+                    decelBrake.record(
+                        expected: recDecel,
+                        got: SafetyGates.decelerationBrake(da, 0.0),
+                        ctx: "deltaAccl=\(da)"
+                    )
                 }
 
                 // 4) finalDose — uncapped states only (the device's CONFIRMED/COMMITTED cap config
@@ -149,9 +156,11 @@ final class V5ShadowReplayTests: XCTestCase {
                         doseMlResidual += 1
                     } else {
                         doseGenuine += 1
-                        genuine.record(expected: recDose,
-                                       got: max(0, (base / rs + 1e-9).rounded(.down) * rs),
-                                       ctx: "\(stateStr) base=\(base)")
+                        genuine.record(
+                            expected: recDose,
+                            got: max(0, (base / rs + 1E-9).rounded(.down) * rs),
+                            ctx: "\(stateStr) base=\(base)"
+                        )
                     }
                 }
 
@@ -163,7 +172,7 @@ final class V5ShadowReplayTests: XCTestCase {
 
         let doseTot = doseExact + doseVelocity + doseMlResidual + doseGenuine
         func pct(_ n: Int) -> Double { doseTot > 0 ? 100.0 * Double(n) / Double(doseTot) : 0 }
-        let reproduced = doseExact + doseVelocity   // explained by inputs we DO have
+        let reproduced = doseExact + doseVelocity // explained by inputs we DO have
 
         print("── V5 shadow dosing replay ───────────────────────────────")
         actionMult.printSummary()
@@ -172,7 +181,11 @@ final class V5ShadowReplayTests: XCTestCase {
         print("── finalDose (uncapped states) — port vs on-device dose, \(doseTot) cycles ──")
         print(String(format: "   exact (velFactor=1.0)             : %6d (%.1f%%)", doseExact, pct(doseExact)))
         print(String(format: "   velocity-reconciled [rise unlogged]: %6d (%.1f%%)", doseVelocity, pct(doseVelocity)))
-        print(String(format: "   ML hypo-risk brake [model offline] : %6d (%.1f%%)  device dosed LESS", doseMlResidual, pct(doseMlResidual)))
+        print(String(
+            format: "   ML hypo-risk brake [model offline] : %6d (%.1f%%)  device dosed LESS",
+            doseMlResidual,
+            pct(doseMlResidual)
+        ))
         print(String(format: "   genuine port-vs-reference diff     : %6d (%.2f%%)", doseGenuine, pct(doseGenuine)))
         print(String(format: "   => reproduced within available inputs: %.1f%%", pct(reproduced)))
         if doseGenuine > 0 { genuine.printSummary() }
@@ -181,26 +194,38 @@ final class V5ShadowReplayTests: XCTestCase {
         print("     CONFIRMED/COMMITTED cycles: \(cappedSeen) (dose-cap config not logged)")
 
         // Assert on the cleanly-reconstructable stages …
-        XCTAssertGreaterThan(actionMult.checked, 10_000, "expected a large multi-user V5 sample")
+        XCTAssertGreaterThan(actionMult.checked, 10000, "expected a large multi-user V5 sample")
         XCTAssertGreaterThanOrEqual(actionMult.matchFraction, 0.999, "actionMultiplier diverged")
-        XCTAssertGreaterThanOrEqual(iobBrake.matchFraction, 0.97,
-                                    "iobHeadroom brake diverged on \(iobBrake.failures)/\(iobBrake.checked)")
+        XCTAssertGreaterThanOrEqual(
+            iobBrake.matchFraction,
+            0.97,
+            "iobHeadroom brake diverged on \(iobBrake.failures)/\(iobBrake.checked)"
+        )
         // Residual ~3% is logged-deltaAccl rounding (1-2 dp) shifting the floor/ceiling clamp.
-        XCTAssertGreaterThanOrEqual(decelBrake.matchFraction, 0.95,
-                                    "deceleration brake formula diverged on \(decelBrake.failures)/\(decelBrake.checked)")
+        XCTAssertGreaterThanOrEqual(
+            decelBrake.matchFraction,
+            0.95,
+            "deceleration brake formula diverged on \(decelBrake.failures)/\(decelBrake.checked)"
+        )
         // … and on the dose: once the two offline-unavailable inputs (velocity rise + ML risk model)
         // are accounted for the port must reproduce the on-device dose, and GENUINE differences
         // (no velocity/ML explanation) must be negligible.
-        XCTAssertGreaterThan(doseTot, 5_000, "expected a large uncapped-dose sample")
-        XCTAssertGreaterThanOrEqual(Double(reproduced) / Double(doseTot), 0.95,
-                                    "dose reproduced (incl. velocity) below 95%")
-        XCTAssertLessThanOrEqual(Double(doseGenuine) / Double(doseTot), 0.01,
-                                 "genuine dose divergence \(doseGenuine)/\(doseTot) exceeds 1%")
+        XCTAssertGreaterThan(doseTot, 5000, "expected a large uncapped-dose sample")
+        XCTAssertGreaterThanOrEqual(
+            Double(reproduced) / Double(doseTot),
+            0.95,
+            "dose reproduced (incl. velocity) below 95%"
+        )
+        XCTAssertLessThanOrEqual(
+            Double(doseGenuine) / Double(doseTot),
+            0.01,
+            "genuine dose divergence \(doseGenuine)/\(doseTot) exceeds 1%"
+        )
     }
 
     /// floor(base · velocity / rs) · rs == recDose ?
     private func doseMatches(base: Double, velocity: Double, recDose: Double, rs: Double) -> Bool {
-        let d = max(0, (base * velocity / rs + 1e-9).rounded(.down) * rs)
+        let d = max(0, (base * velocity / rs + 1E-9).rounded(.down) * rs)
         return abs(d - recDose) <= 0.001
     }
 
@@ -211,6 +236,6 @@ final class V5ShadowReplayTests: XCTestCase {
         if base <= 0 { return recDose == 0 }
         let vLo = recDose / base
         let vHi = (recDose + rs) / base
-        return vLo < 1.0 + 1e-9 && vHi > 0.40 - 1e-9
+        return vLo < 1.0 + 1E-9 && vHi > 0.40 - 1E-9
     }
 }

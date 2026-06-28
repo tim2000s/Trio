@@ -67,7 +67,7 @@ final class BoostV5AutoConfigTests: XCTestCase {
         // saturate below that (was clamped to 5.0 before the 2026-06-26 fix).
         let s = BoostV5AutoConfig.compute(prior(manual: [5, 7, 9, 11]))!
         XCTAssertEqual(s.confirmedCapU, 7.5)
-        XCTAssertGreaterThanOrEqual(s.cumulativeSmbCap60MinU, s.confirmedCapU - 1e-9)
+        XCTAssertGreaterThanOrEqual(s.cumulativeSmbCap60MinU, s.confirmedCapU - 1E-9)
     }
 
     func testMaxIobAndBolusCarriedAndClamped() {
