@@ -216,6 +216,38 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             state: prev?.recoveryState ?? RecoveryState()
         )
 
+        // 4) Activity-load source abstraction (SHADOW): pick the active step source across ALL
+        // HealthKit writers (Apple Watch > Garmin > other > iPhone), build the per-source history,
+        // and compute the bridged baseline + would-ΔISF. Telemetry only — not applied to dosing.
+        let (multi, todayBySource, todayIndex) = await fetchStepsBySource(
+            days: ActivityLoadTracker.Const.windowDays, now: now
+        )
+        let freshSources = await freshStepSources(minutes: 20, now: now)
+        let candidateSources = Set(multi.sources.keys).union(todayBySource.keys)
+        let states = candidateSources.map { src in
+            StepSourceResolver.SourceState(
+                source: src,
+                fresh: freshSources.contains(src),
+                coverageDays: multi.sources[src]?.days.count ?? 0,
+                stepsToday: todayBySource[src] ?? 0
+            )
+        }
+        let stepRes = StepSourceResolver.resolve(states)
+        let bridged = ActivityLoadTracker.bridgedWindow(multi, activeSource: stepRes.active, todayIndex: todayIndex)
+        let load = ActivityLoadTracker.compute(bridged.history, todayIndex: todayIndex)
+        let intraday = ActivityLoadTracker.intradayLoad(
+            stepsToday: stepRes.stepsToday,
+            baseline: load.baselineSteps,
+            hourOfDay: Calendar.current.component(.hour, from: now)
+        )
+        let bridgeNote = bridged.donorsUsed.isEmpty
+            ? "none"
+            : bridged.donorsUsed.joined(separator: "+") + (bridged.calibrated ? "" : "(raw)")
+
+        // 5) HR source visibility (SHADOW) — which device feeds HR + silent-death detection.
+        let hrSourceReadings = await fetchHrSourceReadings(since: now.addingTimeInterval(-16 * 60), now: now)
+        let hrRes = HrSourceResolver.resolve(hrSourceReadings, now: now)
+
         let snap = BoostActivitySnapshot(
             steps30min: steps30,
             latestHeartRate: latestHr,
@@ -229,6 +261,15 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             lastExerciseAt: activity.exerciseActive ? now : prev?.lastExerciseAt,
             sleepState: sleep,
             recoveryState: recovery.newState,
+            stepSource: stepRes.active,
+            stepSourceStates: stepRes.note,
+            activityBaselineSteps: load.baselineSteps,
+            activityRatio: load.ratio,
+            activityWouldDeltaIsfPct: load.wouldDeltaIsfPct,
+            activityIntradayDeltaIsfPct: intraday,
+            activityBridge: bridgeNote,
+            hrSource: hrRes.active,
+            hrSourceStates: hrRes.note,
             updatedAt: now
         )
         BoostActivityStore.shared.snapshot = snap
@@ -236,6 +277,10 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         debug(
             .service,
             "BoostActivityMonitor: steps5/15/30/60=\(steps5)/\(steps15)/\(Int(steps30))/\(steps60) hr=\(Int(latestHr)) rhr=\(Int(restingHr)) state=\(activity.state.rawValue) asleep=\(asleep) postEx=\(recovery.inRecoveryWindow)"
+        )
+        debug(
+            .service,
+            "BoostActivitySource: step=\(stepRes.active ?? "none") [\(stepRes.note)] base=\(load.baselineSteps.map { String(Int($0)) } ?? "nil") ratio=\(load.ratio.map { String(format: "%.2f", $0) } ?? "nil") wouldΔISF=\(load.wouldDeltaIsfPct.map { String(format: "%.1f", $0) } ?? "nil")% bridge=\(bridgeNote) hr=\(hrRes.active ?? "none") [\(hrRes.note)]"
         )
     }
 
@@ -329,6 +374,109 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             ) { _, samples, _ in
                 let value = (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit)
                 continuation.resume(returning: value)
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    // MARK: - Activity-load source abstraction (2026-06-28, SHADOW)
+
+    /// Local epoch-day index — mirrors AAPS `DailyStepHistoryTracker.dayIndex`.
+    private func dayIndex(_ date: Date, _ offsetMs: Double) -> Int {
+        Int((date.timeIntervalSince1970 * 1000.0 + offsetMs) / 86_400_000.0)
+    }
+
+    /// Canonical source id for an `HKSource` — prefer its name (Apple Watch / iPhone carry the device
+    /// name; Garmin's name "Garmin Connect" and bundle both contain "garmin").
+    private func canonicalId(_ source: HKSource) -> String {
+        StepSourceResolver.canonical(source.name.isEmpty ? source.bundleIdentifier : source.name)
+    }
+
+    /// Per-source COMPLETED-day step totals over `days` days + today-by-source, via one
+    /// statistics-collection query split by source. HealthKit is the persistent per-source store, so
+    /// the multi-source history is rebuilt each refresh (no app-side persistence needed).
+    private func fetchStepsBySource(days: Int, now: Date)
+    async -> (multi: ActivityLoadTracker.MultiSourceHistory, todayBySource: [String: Int], todayIndex: Int)
+    {
+        guard let stepType else { return (.init(), [:], 0) }
+        let cal = Calendar.current
+        let offsetMs = Double(cal.timeZone.secondsFromGMT(for: now)) * 1000.0
+        let todayIndex = dayIndex(now, offsetMs)
+        let anchor = cal.startOfDay(for: now)
+        let start = cal.date(byAdding: .day, value: -days, to: anchor) ?? anchor
+        var interval = DateComponents()
+        interval.day = 1
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: now)
+            let query = HKStatisticsCollectionQuery(
+                quantityType: stepType,
+                quantitySamplePredicate: predicate,
+                options: [.cumulativeSum, .separateBySource],
+                anchorDate: anchor,
+                intervalComponents: interval
+            )
+            query.initialResultsHandler = { _, collection, _ in
+                var perSource: [String: [ActivityLoadTracker.DailyStepTotal]] = [:]
+                var todayBySource: [String: Int] = [:]
+                collection?.enumerateStatistics(from: start, to: now) { stats, _ in
+                    let di = self.dayIndex(stats.startDate, offsetMs)
+                    for src in stats.sources ?? [] {
+                        guard let qty = stats.sumQuantity(for: src) else { continue }
+                        let steps = Int(qty.doubleValue(for: .count()))
+                        if steps <= 0 { continue }
+                        let canon = self.canonicalId(src)
+                        if di < todayIndex {
+                            perSource[canon, default: []].append(.init(dayIndex: di, steps: steps, source: canon))
+                        } else {
+                            todayBySource[canon, default: 0] += steps
+                        }
+                    }
+                }
+                var multi = ActivityLoadTracker.MultiSourceHistory()
+                for (src, totals) in perSource {
+                    multi = ActivityLoadTracker.mergeSource(multi, source: src, totals: totals, todayIndex: todayIndex)
+                }
+                continuation.resume(returning: (multi, todayBySource, todayIndex))
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    /// Canonical step sources that produced steps in the last `minutes` minutes — the "fresh" set.
+    private func freshStepSources(minutes: Double, now: Date) async -> Set<String> {
+        guard let stepType else { return [] }
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: now.addingTimeInterval(-minutes * 60), end: now)
+            let query = HKStatisticsQuery(
+                quantityType: stepType,
+                quantitySamplePredicate: predicate,
+                options: [.cumulativeSum, .separateBySource]
+            ) { _, stats, _ in
+                var fresh = Set<String>()
+                for src in stats?.sources ?? [] {
+                    if let qty = stats?.sumQuantity(for: src), qty.doubleValue(for: .count()) > 0 {
+                        fresh.insert(self.canonicalId(src))
+                    }
+                }
+                continuation.resume(returning: fresh)
+            }
+            healthKitStore.execute(query)
+        }
+    }
+
+    /// Recent HR samples tagged with their source, for `HrSourceResolver` (visibility only).
+    private func fetchHrSourceReadings(since: Date, now: Date) async -> [HrSourceResolver.Reading] {
+        guard let hrType else { return [] }
+        return await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: since, end: now)
+            let query = HKSampleQuery(
+                sampleType: hrType, predicate: predicate,
+                limit: HKObjectQueryNoLimit, sortDescriptors: nil
+            ) { _, samples, _ in
+                let readings = (samples as? [HKQuantitySample] ?? []).map { s in
+                    HrSourceResolver.Reading(device: s.sourceRevision.source.name, timestamp: s.endDate)
+                }
+                continuation.resume(returning: readings)
             }
             healthKitStore.execute(query)
         }
