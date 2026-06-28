@@ -452,24 +452,28 @@ extension Preferences: Decodable {
             preferences.boostEnableCircadianIsf = v
         }
 
+        // Boost dosing knobs are clamped to their documented slider ranges on decode. The UI sliders
+        // already enforce these, but an imported / remote / corrupted preferences JSON bypasses the
+        // UI and feeds the engine directly — for dosing-magnitude caps an out-of-range value must not
+        // reach the dosing path.
         if let v = try? container.decode(Decimal.self, forKey: .boostV5Aggression) {
-            preferences.boostV5Aggression = v
+            preferences.boostV5Aggression = max(0.7, min(1.3, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5HypoCaution) {
-            preferences.boostV5HypoCaution = v
+            preferences.boostV5HypoCaution = max(1.0, min(2.0, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5Sensitivity) {
-            preferences.boostV5Sensitivity = v
+            preferences.boostV5Sensitivity = max(0.8, min(1.2, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5ConfirmedCapU) {
-            preferences.boostV5ConfirmedCapU = v
+            preferences.boostV5ConfirmedCapU = max(0, min(7.5, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5CommittedCapU) {
-            preferences.boostV5CommittedCapU = v
+            preferences.boostV5CommittedCapU = max(0, min(2.5, v))
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5ConfirmedCapUUserSet) {

@@ -13,7 +13,14 @@ public enum MealScoreConstants {
     public static let sustainedRiseNormalizeLoMgdl = 20.0
     public static let sustainedRiseNormalizeHiMgdl = 60.0
     public static let mlMealRenormalizeAfterCycles = 3
-    public static let mlMealRenormalizeFactor = 1.0 / (1.0 - weightMlMealLikely)
+    /// Sum of all seven signal weights. They do NOT sum to 1.0 (they sum to 1.07), so the
+    /// ML-dropout renormalizer must divide by the real remaining total — not assume unity —
+    /// otherwise the no-ML score is scaled onto a different basis than the with-ML score and
+    /// biases the meal hypothesis toward earlier CONFIRMED. Referencing `totalWeight` keeps the
+    /// degraded (no-ML) path on the same scale as the normal path regardless of the weight sum.
+    public static let totalWeight = weightDelta + weightDeltaAccl + weightMlMealLikely
+        + weightNotRecentlyLow + weightMealTimeOfDay + weightNotExercising + weightSustainedRise
+    public static let mlMealRenormalizeFactor = totalWeight / (totalWeight - weightMlMealLikely)
     public static let notRecentlyLowFloor = 0.4
 }
 
