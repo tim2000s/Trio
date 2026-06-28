@@ -152,7 +152,37 @@ struct OpenAPSSwift {
                     // `asleep` = SleepStateDetector SLEEPING via the activity snapshot (staleness-guarded).
                     let asleep = BoostActivityStore.shared.flags(now: clock).asleep
                     if microBolusAllowed, !asleep {
-                        det.units = Decimal(result.decision.finalDose)
+                        var boostDose = Decimal(result.decision.finalDose)
+
+                        // Safety: the active override must not exceed the user's stock per-SMB size
+                        // cap (maxSMBBasalMinutes / maxUAMSMBBasalMinutes). Re-clamp to the exact
+                        // ceiling stock determine-basal uses; min() can only reduce the dose.
+                        if let currentBasal = profile.currentBasal, let currentIob = iob.first?.iob {
+                            let smbMaxBolus = DosingEngine.determineMaxBolus(
+                                currentBasal: currentBasal,
+                                currentIob: currentIob,
+                                adjustedCarbRatio: det.carbRatio ?? 1,
+                                mealData: mealData,
+                                profile: profile,
+                                trioCustomOrefVariables: trioCustomOrefVariables
+                            )
+                            boostDose = min(boostDose, smbMaxBolus)
+                        }
+
+                        // Safety: respect the SMB interval (stock clamps it to 1...10 min, default 3).
+                        // Only override when more than that has elapsed since the last bolus — matching
+                        // stock determineSMBDelivery — so the override cannot fire an SMB every loop when
+                        // the user configured a longer interval.
+                        var smbInterval = Decimal(3)
+                        if !profile.smbInterval.isNaN { smbInterval = min(10, max(1, profile.smbInterval)) }
+                        let lastBolusAgeMin: Decimal? = iob.first?.lastBolusTime.map {
+                            (Decimal(clock.timeIntervalSince1970 * 1000) - Decimal($0)) / 60000
+                        }
+                        if let age = lastBolusAgeMin, age > smbInterval {
+                            det.units = boostDose
+                        } else {
+                            det.reason += " V6 SMB held (\(smbInterval)m SMB interval not elapsed);"
+                        }
                     } else if asleep {
                         det.reason += " V6 suppressed (SLEEPING) — base SMB stands;"
                     }

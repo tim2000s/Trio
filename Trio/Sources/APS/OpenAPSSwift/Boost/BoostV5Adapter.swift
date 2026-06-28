@@ -42,8 +42,8 @@ enum BoostV5Adapter {
         var aggression: Double = 1.0
         var hypoCaution: Double = 1.0
         var sensitivity: Double = 1.0
-        var confirmedCapU: Double = 2.5   // fallback; host normally passes preferences.boostV5ConfirmedCapU
-        var committedCapU: Double = 0.5   // fallback; host normally passes preferences.boostV5CommittedCapU
+        var confirmedCapU: Double = 2.5 // fallback; host normally passes preferences.boostV5ConfirmedCapU
+        var committedCapU: Double = 0.5 // fallback; host normally passes preferences.boostV5CommittedCapU
         var fastCarbConfirm: Bool = true
     }
 
@@ -166,53 +166,58 @@ enum BoostV5Adapter {
         // hypothesis (TIME_JUMP_RESET_MINUTES = 30). This is the wired reset signal in Trio;
         // profileSwitched/pumpDisconnected/loopSuspended aren't exposed at this layer (left false),
         // but any >30-min interruption from those is caught by the gap.
-        let persisted = store.loadState()
         let nowMs = clock.timeIntervalSince1970 * 1000.0
-        let timeJumpMinutes = persisted.lastRunMs.map { abs((nowMs - $0) / 60000.0) } ?? 0.0
+        // Atomic load→decide→save under one lock: timeJumpMinutes, the state passed to decide(), and
+        // the state written back must all come from the SAME locked snapshot. Otherwise a scheduled
+        // loop overlapping a post-bolus determineBasalSync can lose an update (last-writer-wins) —
+        // e.g. erase a CONFIRMED hypothesis so the next cycle re-fires its SMB for the same meal.
+        let decision = store.mutateState { state -> V5Decision in
+            let timeJumpMinutes = state.lastRunMs.map { abs((nowMs - $0) / 60000.0) } ?? 0.0
 
-        let inputs = V5Inputs(
-            delta: delta,
-            shortAvgDelta: shortAvg,
-            deltaAccl: deltaAccl,
-            bg: bg,
-            eventualBg: eventualBg,
-            targetBg: targetBg,
-            maxDelta: maxDelta,
-            minGuardBg: minGuardBg,
-            minGuardThreshold: minGuardThreshold,
-            deltaHistory: [longAvg, shortAvg, delta],
-            iob: iob,
-            maxIob: maxIob,
-            baseInsulinReq: baseInsulinReq,
-            roundSmbTo: roundSmbTo,
-            // AAPS: enableSmbPreChecks = activeMode ? microBolusAllowed : true. In shadow it stays
-            // permissive so the logged would-be dose isn't hard-gated to 0 (active dosing unaffected).
-            enableSmbPreChecks: mode == .active ? microBolusAllowed : true,
-            mlHypoRisk: mlHypoRisk, // bundled LightGBM; nil → score renormalize path
-            mlMealLikely: mlMealLikely, // bundled LightGBM; nil → score renormalize path
-            recentLowBg: recentLowBg(glucose, now: clock),
-            cumulativeRise30min: max(0.0, shortAvg * 6.0),
-            hour: hour,
-            // AAPS parity: V5 ignores exercise/post-exercise (v5_exerciseActive/v5_inPostExerciseWindow
-            // are hardcoded false in AAPS — the deferred "V0" stubs). The observed flags are still
-            // logged in the reason tag for shadow analysis; the exercise feature gets switched on
-            // (here) once that analysis is in. `asleep` IS live in AAPS (sleepState == SLEEPING), so kept.
-            exerciseActive: false,
-            inPostExerciseWindow: false,
-            asleep: activity.asleep,
-            fastCarbConfirmEnabled: knobs.fastCarbConfirm,
-            timeJumpMinutes: timeJumpMinutes,
-            aggressionUserKnob: knobs.aggression,
-            hypoCautionUserKnob: knobs.hypoCaution,
-            sensitivityUserKnob: knobs.sensitivity,
-            confirmedCapU: knobs.confirmedCapU,
-            committedCapU: knobs.committedCapU
-        )
+            let inputs = V5Inputs(
+                delta: delta,
+                shortAvgDelta: shortAvg,
+                deltaAccl: deltaAccl,
+                bg: bg,
+                eventualBg: eventualBg,
+                targetBg: targetBg,
+                maxDelta: maxDelta,
+                minGuardBg: minGuardBg,
+                minGuardThreshold: minGuardThreshold,
+                deltaHistory: [longAvg, shortAvg, delta],
+                iob: iob,
+                maxIob: maxIob,
+                baseInsulinReq: baseInsulinReq,
+                roundSmbTo: roundSmbTo,
+                // AAPS: enableSmbPreChecks = activeMode ? microBolusAllowed : true. In shadow it stays
+                // permissive so the logged would-be dose isn't hard-gated to 0 (active dosing unaffected).
+                enableSmbPreChecks: mode == .active ? microBolusAllowed : true,
+                mlHypoRisk: mlHypoRisk, // bundled LightGBM; nil → score renormalize path
+                mlMealLikely: mlMealLikely, // bundled LightGBM; nil → score renormalize path
+                recentLowBg: recentLowBg(glucose, now: clock),
+                cumulativeRise30min: max(0.0, shortAvg * 6.0),
+                hour: hour,
+                // AAPS parity: V5 ignores exercise/post-exercise (v5_exerciseActive/v5_inPostExerciseWindow
+                // are hardcoded false in AAPS — the deferred "V0" stubs). The observed flags are still
+                // logged in the reason tag for shadow analysis; the exercise feature gets switched on
+                // (here) once that analysis is in. `asleep` IS live in AAPS (sleepState == SLEEPING), so kept.
+                exerciseActive: false,
+                inPostExerciseWindow: false,
+                asleep: activity.asleep,
+                fastCarbConfirmEnabled: knobs.fastCarbConfirm,
+                timeJumpMinutes: timeJumpMinutes,
+                aggressionUserKnob: knobs.aggression,
+                hypoCautionUserKnob: knobs.hypoCaution,
+                sensitivityUserKnob: knobs.sensitivity,
+                confirmedCapU: knobs.confirmedCapU,
+                committedCapU: knobs.committedCapU
+            )
 
-        let decision = BoostV5Engine.decide(inputs, persisted: persisted)
-        var newState = decision.newPersistedState
-        newState.lastRunMs = nowMs
-        store.saveState(newState)
+            let decision = BoostV5Engine.decide(inputs, persisted: state)
+            state = decision.newPersistedState
+            state.lastRunMs = nowMs
+            return decision
+        }
         // V6 learning: record a fresh CONFIRMED commit (meal-time history → pre-meal target).
         if decision.mealHypothesis == .confirmed, decision.mealHypothesisAge == 0 {
             BoostMealTimeStore.shared.recordConfirmed(at: clock)
