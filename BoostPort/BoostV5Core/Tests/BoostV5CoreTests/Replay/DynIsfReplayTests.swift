@@ -35,13 +35,19 @@ final class DynIsfReplayTests: XCTestCase {
                   let delta = c.delta, let short = c.shortAvgDelta, let expected = c.deltaAcceleration,
                   abs(short) >= 2.0, abs(delta - short) >= 1.0
             else { continue }
-            report.record(expected: expected, got: DynIsf.deltaAccl(delta: delta, shortAvgDelta: short),
-                          ctx: "delta=\(delta) short=\(short)")
+            report.record(
+                expected: expected,
+                got: DynIsf.deltaAccl(delta: delta, shortAvgDelta: short),
+                ctx: "delta=\(delta) short=\(short)"
+            )
         }
         report.printSummary()
         XCTAssertGreaterThan(report.checked, 5000, "expected a large delta-accel sample")
-        XCTAssertGreaterThanOrEqual(report.matchFraction, 0.95,
-                                    "deltaAccl diverged from recorded on \(report.failures) rows")
+        XCTAssertGreaterThanOrEqual(
+            report.matchFraction,
+            0.95,
+            "deltaAccl diverged from recorded on \(report.failures) rows"
+        )
     }
 
     // MARK: - blended TDD (user-independent; v1/v2 weighted blend only)
@@ -54,16 +60,26 @@ final class DynIsfReplayTests: XCTestCase {
             guard let c = row.console,
                   let t7 = c.tdd7d, let t1 = c.tdd1d, let t4 = c.tdd4h, let t84 = c.tdd8to4h
             else { continue }
-            let gotBlended = DynIsf.blendedTdd(last4h: t4, last8to4h: t84, tdd7d: t7, tdd1d: t1,
-                                               adjustmentFactorPct: 100)
+            let gotBlended = DynIsf.blendedTdd(
+                last4h: t4,
+                last8to4h: t84,
+                tdd7d: t7,
+                tdd1d: t1,
+                adjustmentFactorPct: 100
+            )
             // Only rows that print "Blended TDD=" use the weighted blend the Swift port implements
             // (v1/v2). The v3 variant prints "TDD=" (adjusted7D) instead and uses a different
             // pull-down rule — intentionally out of scope here (see REPLAY.md).
             guard let expB = c.blendedTdd else { continue }
             blended.record(expected: expB, got: gotBlended, ctx: "7D=\(t7) 1D=\(t1) 4H=\(t4) 8-4H=\(t84)")
             if let expF = c.finalTdd, let adj = c.adjFactorPct {
-                let gotFinal = DynIsf.blendedTdd(last4h: t4, last8to4h: t84, tdd7d: t7, tdd1d: t1,
-                                                 adjustmentFactorPct: adj)
+                let gotFinal = DynIsf.blendedTdd(
+                    last4h: t4,
+                    last8to4h: t84,
+                    tdd7d: t7,
+                    tdd1d: t1,
+                    adjustmentFactorPct: adj
+                )
                 final.record(expected: expF, got: gotFinal, ctx: "adj=\(adj)%")
             }
         }
@@ -108,12 +124,15 @@ final class DynIsfReplayTests: XCTestCase {
         func best(in range: ClosedRange<Double>, step: Double) -> Double {
             var best = range.lowerBound, bestErr = Double.infinity, d = range.lowerBound
             while d <= range.upperBound {
-                let e = meanAbsErr(rows, divisor: d); if e < bestErr { bestErr = e; best = d }; d += step
+                let e = meanAbsErr(rows, divisor: d)
+                if e < bestErr { bestErr = e
+                    best = d }
+                d += step
             }
             return best
         }
-        let coarse = best(in: 45...120, step: 1.0)
-        return best(in: (coarse - 1.5)...(coarse + 1.5), step: 0.05)
+        let coarse = best(in: 45 ... 120, step: 1.0)
+        return best(in: (coarse - 1.5) ... (coarse + 1.5), step: 0.05)
     }
 
     /// The DynISF golden master is scoped to **Boost v4.1.5** (`variant == "v1"`) — the reference
@@ -132,7 +151,8 @@ final class DynIsfReplayTests: XCTestCase {
 
     private static func yearMonth(_ epoch: Double?) -> String {
         guard let epoch else { return "?" }
-        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
         let d = cal.dateComponents([.year, .month], from: Date(timeIntervalSince1970: epoch))
         return String(format: "%04d-%02d", d.year ?? 0, d.month ?? 0)
     }
@@ -152,7 +172,7 @@ final class DynIsfReplayTests: XCTestCase {
 
         var report = ReplayReport("variableSens @ per-epoch fitted divisor (v4.1.5/v1)", tolerance: 0.2)
         var segmentsChecked = 0
-        var divisors: [String: Double] = [:]   // user -> last divisor seen (for a compact summary)
+        var divisors: [String: Double] = [:] // user -> last divisor seen (for a compact summary)
 
         for key in groups.keys.sorted() {
             let usable = groups[key]!
@@ -161,24 +181,32 @@ final class DynIsfReplayTests: XCTestCase {
             let fitted = fitDivisor(usable)
             divisors[String(key.prefix(while: { $0 != "|" }))] = fitted
             for c in usable {
-                report.record(expected: c.variableSens!, got: variableSens(c, divisor: fitted),
-                              ctx: "\(key) bgCapped=\(c.bgCapped) sNT=\(c.sensNormalTarget!) v=\(c.velocity)")
+                report.record(
+                    expected: c.variableSens!,
+                    got: variableSens(c, divisor: fitted),
+                    ctx: "\(key) bgCapped=\(c.bgCapped) sNT=\(c.sensNormalTarget!) v=\(c.velocity)"
+                )
             }
         }
         print("── DynISF divisor by user (v4.1.5/v1, last epoch) ───────────────────────────────")
         for u in divisors.keys.sorted() { print(String(format: "   %@: ~%.1f", u, divisors[u]!)) }
         if !outOfScope.isEmpty {
-            print("   out-of-scope variants skipped: " + outOfScope.sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+            print(
+                "   out-of-scope variants skipped: " + outOfScope.sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            )
         }
         report.printSummary()
 
         XCTAssertGreaterThanOrEqual(segmentsChecked, 5, "expected several config epochs with enough data")
-        XCTAssertGreaterThan(report.checked, 50_000, "expected a large multi-user v4.1.5 sample")
+        XCTAssertGreaterThan(report.checked, 50000, "expected a large multi-user v4.1.5 sample")
         // A faithful port reproduces the recorded DynISF output across the vast majority of real
         // v4.1.5 cycles in every config epoch; lower means a formula drift.
-        XCTAssertGreaterThanOrEqual(report.matchFraction, 0.99,
-                                    "variableSens diverged on \(report.failures)/\(report.checked) rows")
+        XCTAssertGreaterThanOrEqual(
+            report.matchFraction,
+            0.99,
+            "variableSens diverged on \(report.failures)/\(report.checked) rows"
+        )
     }
 
     // MARK: - sensNormalTarget from TDD (per-user divisor; TT-off rows only)
@@ -194,8 +222,11 @@ final class DynIsfReplayTests: XCTestCase {
             byKey[epochKey(c, cf), default: []].append(c)
         }
 
-        var report = ReplayReport("isfTargetV1 × globalScale = TDD ISF at target (v4.1.5/v1)",
-                                  tolerance: 0.3, relTolerance: 0.015)
+        var report = ReplayReport(
+            "isfTargetV1 × globalScale = TDD ISF at target (v4.1.5/v1)",
+            tolerance: 0.3,
+            relTolerance: 0.015
+        )
         for key in byKey.keys.sorted() {
             let group = byKey[key]!
             let usable = group.compactMap(usableForVarSens)
@@ -207,13 +238,20 @@ final class DynIsfReplayTests: XCTestCase {
                       let finalTdd = c.finalTdd, finalTdd > 0
                 else { continue }
                 let isf = DynIsf.isfTargetV1(tdd: finalTdd, normalTarget: c.normalTarget, insulinDivisor: divisor)
-                let got = ((isf * c.globalScale) * 10).rounded() / 10  // AAPS rounds to 0.1
-                report.record(expected: expected, got: got, ctx: "\(key) tdd=\(finalTdd) nt=\(c.normalTarget) scale=\(c.globalScale)")
+                let got = ((isf * c.globalScale) * 10).rounded() / 10 // AAPS rounds to 0.1
+                report.record(
+                    expected: expected,
+                    got: got,
+                    ctx: "\(key) tdd=\(finalTdd) nt=\(c.normalTarget) scale=\(c.globalScale)"
+                )
             }
         }
         report.printSummary()
-        XCTAssertGreaterThan(report.checked, 10_000)
-        XCTAssertGreaterThanOrEqual(report.matchFraction, 0.97,
-                                    "isfTargetV1 diverged on \(report.failures)/\(report.checked) rows")
+        XCTAssertGreaterThan(report.checked, 10000)
+        XCTAssertGreaterThanOrEqual(
+            report.matchFraction,
+            0.97,
+            "isfTargetV1 diverged on \(report.failures)/\(report.checked) rows"
+        )
     }
 }

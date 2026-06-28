@@ -83,15 +83,15 @@ struct ReplayCycle {
 ///   Circadian ISF: false
 struct ConsoleFields {
     // DynISF line
-    let normalTarget: Double          // mg/dL (mmol values <25 are scaled ×18)
-    let velocity: Double              // fraction (console prints 1.0 == 100%)
-    let bgCap: Double                 // mg/dL
-    let bgCapped: Double              // mg/dL
+    let normalTarget: Double // mg/dL (mmol values <25 are scaled ×18)
+    let velocity: Double // fraction (console prints 1.0 == 100%)
+    let bgCap: Double // mg/dL
+    let bgCapped: Double // mg/dL
 
     // ISF line (expected outputs)
     let profileSens: Double?
-    let variableSens: Double?         // mg/dL — the recorded DynISF output
-    let sensNormalTarget: Double?     // mg/dL — ISF at normal target (already ×globalScale)
+    let variableSens: Double? // mg/dL — the recorded DynISF output
+    let sensNormalTarget: Double? // mg/dL — ISF at normal target (already ×globalScale)
 
     // TDD breakdown
     let tdd7d: Double?
@@ -100,19 +100,19 @@ struct ConsoleFields {
     let tdd8to4h: Double?
     let blendedTdd: Double?
     let finalTdd: Double?
-    let adjFactorPct: Double?         // e.g. 70
-    let tddIsfAtTarget: Double?       // "TDD ISF at target: X" — pure isfTargetV1 × globalScale,
-                                      // BEFORE the TT / autosens sensitivity-ratio division
+    let adjFactorPct: Double? // e.g. 70
+    let tddIsfAtTarget: Double? // "TDD ISF at target: X" — pure isfTargetV1 × globalScale,
+    // BEFORE the TT / autosens sensitivity-ratio division
 
     // Glucose line
     let delta: Double?
     let shortAvgDelta: Double?
     let longAvgDelta: Double?
-    let deltaAcceleration: Double?    // percent
+    let deltaAcceleration: Double? // percent
 
     // Context
-    let profilePercent: Double?       // e.g. 140 → globalScale = 100/140
-    let ttSet: Bool?                  // "(TT: true/false)"
+    let profilePercent: Double? // e.g. 140 → globalScale = 100/140
+    let ttSet: Bool? // "(TT: true/false)"
     let circadianEnabled: Bool?
 
     /// globalScale = 100 / profilePercent (AAPS profile-% inverse ISF scaling). 1.0 if unknown.
@@ -235,10 +235,13 @@ enum ReplayFixture {
             for i in buf.indices {
                 if buf[i] == newline {
                     if i > lineStart {
-                        let slice = Data(bytes: buf.baseAddress!.advanced(by: lineStart),
-                                         count: i - lineStart)
+                        let slice = Data(
+                            bytes: buf.baseAddress!.advanced(by: lineStart),
+                            count: i - lineStart
+                        )
                         if let row = try? decoder.decode(BoostDecisionRow.self, from: slice),
-                           let cycle = row.toCycle() {
+                           let cycle = row.toCycle()
+                        {
                             cycles.append(cycle)
                         }
                     }
@@ -269,8 +272,8 @@ enum ReplayFixture {
             return URL(fileURLWithPath: p)
         }
         return URL(fileURLWithPath: "\(file)")
-            .deletingLastPathComponent()        // Replay/
-            .deletingLastPathComponent()        // BoostV5CoreTests/
+            .deletingLastPathComponent() // Replay/
+            .deletingLastPathComponent() // BoostV5CoreTests/
             .appendingPathComponent("Fixtures/v5_shadow.ndjson")
     }
 
@@ -279,8 +282,8 @@ enum ReplayFixture {
         //  -> .../Tests/BoostV5CoreTests/Fixtures/boost_decisions.ndjson
         let thisFile = URL(fileURLWithPath: "\(file)")
         return thisFile
-            .deletingLastPathComponent()        // Replay/
-            .deletingLastPathComponent()        // BoostV5CoreTests/
+            .deletingLastPathComponent() // Replay/
+            .deletingLastPathComponent() // BoostV5CoreTests/
             .appendingPathComponent("Fixtures/boost_decisions.ndjson")
     }
 }
