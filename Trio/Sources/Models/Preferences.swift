@@ -67,6 +67,10 @@ struct Preferences: JSON, Equatable {
     var boostV5Sensitivity: Decimal = 1.0 // 0.8…1.2 — budget lever
     var boostV5ConfirmedCapU: Decimal = 2.5 // 0…7.5 U
     var boostV5CommittedCapU: Decimal = 0.5 // 0…2.5 U
+    // Rolling-60-min cumulative SMB cap (anti-stacking / dose-frequency safeguard, matches AAPS).
+    // 0 disables. Default permissive (10 = max) on purpose: auto-config LOWERS it per user; a
+    // conservative default would needlessly throttle before personalisation.
+    var boostCumulativeSmbCap60Min: Decimal = 10.0 // 0…10 U
     var boostV5FastCarbConfirm: Bool = true
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
@@ -75,6 +79,7 @@ struct Preferences: JSON, Equatable {
     // to the default). Not user-facing.
     var boostV5ConfirmedCapUUserSet: Bool = false
     var boostV5CommittedCapUUserSet: Bool = false
+    var boostCumulativeSmbCap60MinUserSet: Bool = false
     // Internal one-shot flag: set true once the V5 knobs have been auto-configured from the user's
     // prior (oref) dosing history on first switch to boostMode == .active. Not user-facing.
     var boostV5AutoConfigDone: Bool = false
@@ -174,9 +179,11 @@ extension Preferences {
         case boostV5Sensitivity
         case boostV5ConfirmedCapU
         case boostV5CommittedCapU
+        case boostCumulativeSmbCap60Min
         case boostV5FastCarbConfirm
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
+        case boostCumulativeSmbCap60MinUserSet
         case boostV5AutoConfigDone
         case boostNightModeEnabled
         case boostNightModeStartHour
@@ -476,12 +483,20 @@ extension Preferences: Decodable {
             preferences.boostV5CommittedCapU = max(0, min(2.5, v))
         }
 
+        if let v = try? container.decode(Decimal.self, forKey: .boostCumulativeSmbCap60Min) {
+            preferences.boostCumulativeSmbCap60Min = max(0, min(10, v))
+        }
+
         if let v = try? container.decode(Bool.self, forKey: .boostV5ConfirmedCapUUserSet) {
             preferences.boostV5ConfirmedCapUUserSet = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5CommittedCapUUserSet) {
             preferences.boostV5CommittedCapUUserSet = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostCumulativeSmbCap60MinUserSet) {
+            preferences.boostCumulativeSmbCap60MinUserSet = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {

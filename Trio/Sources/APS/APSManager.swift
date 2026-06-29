@@ -1046,6 +1046,7 @@ final class BaseAPSManager: APSManager, Injectable {
             if prefs.boostV5HypoCaution == 1.0 { prefs.boostV5HypoCaution = Decimal(s.hypoCaution) }
             if !prefs.boostV5ConfirmedCapUUserSet { prefs.boostV5ConfirmedCapU = Decimal(s.confirmedCapU) }
             if !prefs.boostV5CommittedCapUUserSet { prefs.boostV5CommittedCapU = Decimal(s.committedCapU) }
+            if !prefs.boostCumulativeSmbCap60MinUserSet { prefs.boostCumulativeSmbCap60Min = Decimal(s.cumulativeSmbCap60MinU) }
             if prefs.boostV5FastCarbConfirm == true { prefs.boostV5FastCarbConfirm = s.fastCarbConfirm }
             prefs.boostV5AutoConfigDone = true
             settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
