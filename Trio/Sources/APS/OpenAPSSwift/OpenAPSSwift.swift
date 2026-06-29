@@ -152,6 +152,12 @@ struct OpenAPSSwift {
                     // `asleep` = SleepStateDetector SLEEPING via the activity snapshot (staleness-guarded).
                     let asleep = BoostActivityStore.shared.flags(now: clock).asleep
                     if microBolusAllowed, !asleep {
+                        // Anti-stacking hard gate — faithful port of OpenAPSBoostPlugin.kt:1262. The
+                        // rolling-60-min cumulative-SMB cap bounds dose FREQUENCY (per-shot caps don't);
+                        // suppress the V6 SMB this cycle once the last hour's SMB volume reaches it.
+                        // recentSmb60 is computed above; 0 disables. Auto-config sets the per-user value.
+                        let cumulativeCap = (preferences.boostCumulativeSmbCap60Min as NSDecimalNumber).doubleValue
+                        let cumulativeCapReached = cumulativeCap > 0 && recentSmb60 >= cumulativeCap
                         var boostDose = Decimal(result.decision.finalDose)
 
                         // Safety: the active override must not exceed the user's stock per-SMB size
@@ -178,7 +184,12 @@ struct OpenAPSSwift {
                         let lastBolusAgeMin: Decimal? = iob.first?.lastBolusTime.map {
                             (Decimal(clock.timeIntervalSince1970 * 1000) - Decimal($0)) / 60000
                         }
-                        if let age = lastBolusAgeMin, age > smbInterval {
+                        if cumulativeCapReached {
+                            det.units = 0
+                            det
+                                .reason +=
+                                " V6 suppressed (cumulative SMB cap \(String(format: "%.2f", recentSmb60))U/\(String(format: "%.2f", cumulativeCap))U reached);"
+                        } else if let age = lastBolusAgeMin, age > smbInterval {
                             det.units = boostDose
                         } else {
                             det.reason += " V6 SMB held (\(smbInterval)m SMB interval not elapsed);"

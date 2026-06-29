@@ -24,6 +24,7 @@ extension Settings {
         @Published var boostV5Sensitivity: Decimal = 1.0
         @Published var boostV5ConfirmedCapU: Decimal = 2.5
         @Published var boostV5CommittedCapU: Decimal = 0.5
+        @Published var boostCumulativeSmbCap60Min: Decimal = 10.0
         @Published var boostV5FastCarbConfirm: Bool = true
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
@@ -76,6 +77,8 @@ extension Settings {
             subscribePreferencesSetting(\.boostV5Sensitivity, on: $boostV5Sensitivity) { boostV5Sensitivity = $0 }
             subscribePreferencesSetting(\.boostV5ConfirmedCapU, on: $boostV5ConfirmedCapU) { boostV5ConfirmedCapU = $0 }
             subscribePreferencesSetting(\.boostV5CommittedCapU, on: $boostV5CommittedCapU) { boostV5CommittedCapU = $0 }
+            subscribePreferencesSetting(\.boostCumulativeSmbCap60Min, on: $boostCumulativeSmbCap60Min) {
+                boostCumulativeSmbCap60Min = $0 }
             subscribePreferencesSetting(\.boostV5FastCarbConfirm, on: $boostV5FastCarbConfirm) { boostV5FastCarbConfirm = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
@@ -175,6 +178,7 @@ extension Settings {
         // from the slider's onEditingChanged (genuine user interaction only, never programmatic).
         func markBoostV5ConfirmedCapUserSet() { settingsManager.preferences.boostV5ConfirmedCapUUserSet = true }
         func markBoostV5CommittedCapUserSet() { settingsManager.preferences.boostV5CommittedCapUUserSet = true }
+        func markBoostCumulativeSmbCap60MinUserSet() { settingsManager.preferences.boostCumulativeSmbCap60MinUserSet = true }
     }
 }
 
