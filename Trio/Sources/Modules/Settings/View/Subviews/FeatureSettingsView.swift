@@ -108,6 +108,9 @@ struct FeatureSettingsView: BaseView {
                 boostSlider("Committed cap (U)", $state.boostV5CommittedCapU, in: 0 ... 2.5, step: 0.05) {
                     state.markBoostV5CommittedCapUserSet()
                 }
+                boostSlider("Cumulative SMB cap / 60 min (U)", $state.boostCumulativeSmbCap60Min, in: 0 ... 10, step: 0.1) {
+                    state.markBoostCumulativeSmbCap60MinUserSet()
+                }
                 Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
             }
             .listRowBackground(Color.chart)
