@@ -14,6 +14,7 @@ extension Settings {
         @Injected() var fetchCgmManager: FetchGlucoseManager!
         @Injected() private var storage: FileStorage!
         @Injected() var overrideStorage: OverrideStorage!
+        @Injected() private var boostActivityMonitor: BoostActivityMonitor!
 
         @Published var units: GlucoseUnits = .mgdL
         @Published var closedLoop = false
@@ -71,7 +72,19 @@ extension Settings {
 
             subscribeSetting(\.debugOptions, on: $debugOptions) { debugOptions = $0 }
             subscribeSetting(\.closedLoop, on: $closedLoop) { closedLoop = $0 }
-            subscribePreferencesSetting(\.boostMode, on: $boostMode) { boostMode = $0 }
+            subscribePreferencesSetting(
+                \.boostMode,
+                on: $boostMode,
+                initial: { boostMode = $0 },
+                didSet: { [weak self] mode in
+                    // Enabling Boost prompts for the HealthKit read access its activity/sleep/
+                    // post-exercise sensing needs — the app otherwise only requests Health via the
+                    // separate Apple Health toggle, so without this those features stay silently
+                    // inert. Idempotent (no re-prompt once decided). Fires on the initial subscribe
+                    // too, so already-enabled users get prompted next time they open the screen.
+                    if mode != .off { self?.boostActivityMonitor?.requestAuthorization() }
+                }
+            )
             subscribePreferencesSetting(\.boostV5Aggression, on: $boostV5Aggression) { boostV5Aggression = $0 }
             subscribePreferencesSetting(\.boostV5HypoCaution, on: $boostV5HypoCaution) { boostV5HypoCaution = $0 }
             subscribePreferencesSetting(\.boostV5Sensitivity, on: $boostV5Sensitivity) { boostV5Sensitivity = $0 }
