@@ -14,6 +14,7 @@ import Swinject
 /// no fast-carb overnight, reduced budget post-exercise); both become user settings later.
 protocol BoostActivityMonitor {
     func refresh() async
+    func requestAuthorization()
 }
 
 final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
@@ -71,6 +72,22 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             healthKitStore.execute(query)
             observers.append(query)
             healthKitStore.enableBackgroundDelivery(for: type, frequency: .hourly) { _, _ in }
+        }
+    }
+
+    /// Request HealthKit READ access for Boost's activity inputs (steps, heart rate, resting HR).
+    /// The observers are registered at launch but stay inert until read access is granted, and the
+    /// app otherwise only requests Health access via the separate Apple Health integration toggle —
+    /// so without this, enabling Boost leaves activity / sleep / post-exercise sensing silently off.
+    /// Called when the user enables Boost. Idempotent: iOS shows the prompt only until the user has
+    /// made a choice, then calls back immediately. Refreshes on completion so sensing engages.
+    func requestAuthorization() {
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        let readTypes = Set([stepType, hrType, restingHRType].compactMap { $0 })
+        guard !readTypes.isEmpty else { return }
+        healthKitStore.requestAuthorization(toShare: [], read: readTypes) { [weak self] success, _ in
+            guard success else { return }
+            Task { await self?.refresh() }
         }
     }
 
