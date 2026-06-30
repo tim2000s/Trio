@@ -116,6 +116,15 @@ public enum SafetyGates {
     public static func applyPhase3(_ input: Phase3Inputs) -> Phase3Result {
         var dose = input.insulinToDeliver
 
+        // HARD gate: non-finite inputs must DISABLE dosing, not slip through. A NaN (bad CGM frame,
+        // or an upstream ISF/TDD divide-by-zero) makes every comparison below false, so the
+        // min-guard and max-delta disable gates would fail OPEN and keep dosing. Guard explicitly.
+        guard dose.isFinite, input.bg.isFinite, input.maxDelta.isFinite,
+              input.minGuardBg.isFinite, input.minGuardThreshold.isFinite
+        else {
+            return Phase3Result(finalDose: 0.0, reductions: GateReductions(hardGateFired: "non_finite_input"))
+        }
+
         // HARD gates (binary disable)
         if !input
             .enableSmbPreChecks
