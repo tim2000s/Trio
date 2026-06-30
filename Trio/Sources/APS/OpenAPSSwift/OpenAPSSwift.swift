@@ -160,6 +160,21 @@ struct OpenAPSSwift {
                         let cumulativeCapReached = cumulativeCap > 0 && recentSmb60 >= cumulativeCap
                         var boostDose = Decimal(result.decision.finalDose)
 
+                        // Honour the user's explicit "no SMB" levers even in active mode: master
+                        // SMB-off, the scheduled SMB-off window, and a high temp target with "Allow
+                        // SMB with high temp target" off (the exercise/illness back-off). The active
+                        // override otherwise bypasses the stock smbIsEnabled gate, so without this a
+                        // raised temp target or scheduled off-window would still get a Boost SMB.
+                        // Boost still doses detected meals where stock's enableSMB_* would not.
+                        // current_target mirrors the first pass's adjustedTargetGlucose. try? → false
+                        // (don't suppress) on a calendar error so this can never fail the loop cycle.
+                        let smbUserDisabled = (try? DosingEngine.smbHardDisabledByUserLevers(
+                            profile: profile,
+                            adjustedTargetGlucose: det.current_target ?? 100,
+                            trioCustomOrefVariables: trioCustomOrefVariables,
+                            clock: clock
+                        )) ?? false
+
                         // Safety: the active override must not exceed the user's stock per-SMB size
                         // cap (maxSMBBasalMinutes / maxUAMSMBBasalMinutes). Re-clamp to the exact
                         // ceiling stock determine-basal uses; min() can only reduce the dose.
@@ -184,7 +199,10 @@ struct OpenAPSSwift {
                         let lastBolusAgeMin: Decimal? = iob.first?.lastBolusTime.map {
                             (Decimal(clock.timeIntervalSince1970 * 1000) - Decimal($0)) / 60000
                         }
-                        if cumulativeCapReached {
+                        if smbUserDisabled {
+                            det.units = 0
+                            det.reason += " V6 suppressed (SMB off: temp target / schedule);"
+                        } else if cumulativeCapReached {
                             det.units = 0
                             det
                                 .reason +=
