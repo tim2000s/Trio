@@ -120,8 +120,39 @@ struct OpenAPSSwift {
                 let timeSinceSmb = smbEvents.map(\.timestamp).max()
                     .map { min(720.0, clock.timeIntervalSince($0) / 60.0) } ?? 720.0
 
+                // M2 fidelity: in SHADOW the first pass above is stock oref, so the determination
+                // fed to the engine (eventualBG / insulinReq / predictions / minGuard) is NOT what
+                // ACTIVE would compute under Boost DynISF + future_sens + the V6 pre-meal target —
+                // the logged `wouldSMB` (and its budget / spikeCap) would systematically mis-estimate
+                // the active dose. Run a second, Boost-flavoured determination (boostMode forced
+                // active) purely as the engine input so shadow predicts active faithfully. The real
+                // `det` returned to the pump stays the STOCK determination — shadow never changes
+                // dosing. `generate` only READS the Boost stores, so the extra call has no side
+                // effects; on any failure we fall back to the stock det. Active already has a
+                // Boost-flavoured det; off never reaches this block.
+                var engineDet = det
+                if boostMode == .shadow {
+                    var activePrefs = preferences
+                    activePrefs.boostMode = .active
+                    if let boostDet = try? DeterminationGenerator.generate(
+                        profile: profile,
+                        preferences: activePrefs,
+                        currentTemp: currentTemp,
+                        iobData: iob,
+                        mealData: mealData,
+                        autosensData: autosensData,
+                        reservoirData: reservoir ?? 100,
+                        glucose: glucose,
+                        microBolusAllowed: microBolusAllowed,
+                        trioCustomOrefVariables: trioCustomOrefVariables,
+                        currentTime: clock
+                    ) {
+                        engineDet = boostDet
+                    }
+                }
+
                 let result = BoostV5Adapter.run(
-                    determination: det,
+                    determination: engineDet,
                     glucoseStatus: glucoseStatus,
                     glucose: glucose,
                     iobData: iob,
