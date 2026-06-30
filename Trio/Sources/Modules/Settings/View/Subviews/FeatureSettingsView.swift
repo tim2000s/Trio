@@ -94,6 +94,10 @@ struct FeatureSettingsView: BaseView {
         .background(appState.trioBackgroundColor(for: colorScheme))
         .navigationTitle("Feature Settings")
         .navigationBarTitleDisplayMode(.automatic)
+        // Wire the StateModel to the resolver so subscribe() runs and the Boost setting
+        // bindings persist to preferences. Without this, edits (e.g. Boost Mode) update the
+        // in-memory @Published values but are never written back, so they revert on navigation.
+        .onAppear(perform: configureView)
     }
 
     /// Advanced Boost settings — pushed from the main Feature Settings screen. Mirrors the AAPS V6
