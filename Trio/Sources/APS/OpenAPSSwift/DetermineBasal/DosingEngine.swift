@@ -23,15 +23,12 @@ enum DosingEngine {
         trioCustomOrefVariables: TrioCustomOrefVariables,
         clock: Date
     ) throws -> Bool {
-        if trioCustomOrefVariables.smbIsOff {
-            return false
-        }
-
-        if try isSmbScheduledOff(trioCustomOrefVariables: trioCustomOrefVariables, clock: clock) {
-            return false
-        }
-
-        if !profile.allowSMBWithHighTemptarget, profile.temptargetSet == true, adjustedTargetGlucose > 100 {
+        if try smbHardDisabledByUserLevers(
+            profile: profile,
+            adjustedTargetGlucose: adjustedTargetGlucose,
+            trioCustomOrefVariables: trioCustomOrefVariables,
+            clock: clock
+        ) {
             return false
         }
 
@@ -82,6 +79,33 @@ enum DosingEngine {
             return true
         } else if startHour == endHour, currentHour == startHour {
             // one hour of scheduled off SMB
+            return true
+        }
+
+        return false
+    }
+
+    /// The explicit, user-facing "back off — no SMB" levers, extracted from `isProfileSmbEnabled`:
+    /// the master SMB-off flag, the scheduled SMB-off window, and a high temp target when the user
+    /// has not enabled "Allow SMB with high temp target". Kept separate from the positive
+    /// `enableSMB_*` conditions so the Boost active SMB override can honour these levers (e.g. a
+    /// user raising a temp target for exercise, or a scheduled off-window) without inheriting the
+    /// enable conditions — Boost still doses for detected meals where stock would not.
+    static func smbHardDisabledByUserLevers(
+        profile: Profile,
+        adjustedTargetGlucose: Decimal,
+        trioCustomOrefVariables: TrioCustomOrefVariables,
+        clock: Date
+    ) throws -> Bool {
+        if trioCustomOrefVariables.smbIsOff {
+            return true
+        }
+
+        if try isSmbScheduledOff(trioCustomOrefVariables: trioCustomOrefVariables, clock: clock) {
+            return true
+        }
+
+        if !profile.allowSMBWithHighTemptarget, profile.temptargetSet == true, adjustedTargetGlucose > 100 {
             return true
         }
 

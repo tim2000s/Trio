@@ -440,19 +440,20 @@ extension Preferences: Decodable {
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfNormalTarget) {
-            preferences.boostDynIsfNormalTarget = v
+            // >0 critical: feeds ln(target/divisor + 1); 0 would zero the log → divide-by-zero ISF.
+            preferences.boostDynIsfNormalTarget = max(70, min(120, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfBgCap) {
-            preferences.boostDynIsfBgCap = v
+            preferences.boostDynIsfBgCap = max(100, min(300, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfVelocity) {
-            preferences.boostDynIsfVelocity = v
+            preferences.boostDynIsfVelocity = max(0, min(100, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfAdjustmentFactor) {
-            preferences.boostDynIsfAdjustmentFactor = v
+            preferences.boostDynIsfAdjustmentFactor = max(1, min(300, v))
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostEnableCircadianIsf) {
@@ -531,7 +532,7 @@ extension Preferences: Decodable {
             preferences.boostV6PreMealEnabled = v
         }
         if let v = try? container.decode(Decimal.self, forKey: .boostV6PreMealTargetMgdl) {
-            preferences.boostV6PreMealTargetMgdl = v
+            preferences.boostV6PreMealTargetMgdl = max(65, min(90, v))
         }
         if let v = try? container.decode(Decimal.self, forKey: .boostV6PreMealLeadMin) {
             preferences.boostV6PreMealLeadMin = v
@@ -540,9 +541,14 @@ extension Preferences: Decodable {
         if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps15) { preferences.boostActivitySteps15 = v }
         if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps30) { preferences.boostActivitySteps30 = v }
         if let v = try? container.decode(Decimal.self, forKey: .boostActivitySteps60) { preferences.boostActivitySteps60 = v }
-        if let v = try? container.decode(Decimal.self, forKey: .boostActivityPct) { preferences.boostActivityPct = v }
+        // >0 critical: profilePercent feeds globalScale = 100/profilePercent; 0 → divide-by-zero.
+        if let v = try? container.decode(Decimal.self, forKey: .boostActivityPct) {
+            preferences.boostActivityPct = max(30, min(150, v))
+        }
         if let v = try? container.decode(Decimal.self, forKey: .boostInactivitySteps) { preferences.boostInactivitySteps = v }
-        if let v = try? container.decode(Decimal.self, forKey: .boostInactivityPct) { preferences.boostInactivityPct = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostInactivityPct) {
+            preferences.boostInactivityPct = max(100, min(200, v))
+        }
         if let v = try? container
             .decode(Bool.self, forKey: .boostHrIntegrationEnabled) { preferences.boostHrIntegrationEnabled = v }
         if let v = try? container.decode(Decimal.self, forKey: .boostHrMaxBpm) { preferences.boostHrMaxBpm = v }
@@ -553,7 +559,9 @@ extension Preferences: Decodable {
         if let v = try? container.decode(Decimal.self, forKey: .boostPostExerciseHours) { preferences.boostPostExerciseHours = v }
         if let v = try? container
             .decode(Decimal.self, forKey: .boostPostExerciseTarget) { preferences.boostPostExerciseTarget = v }
-        if let v = try? container.decode(Decimal.self, forKey: .boostPostExerciseScale) { preferences.boostPostExerciseScale = v }
+        if let v = try? container.decode(Decimal.self, forKey: .boostPostExerciseScale) {
+            preferences.boostPostExerciseScale = max(0, min(1, v))
+        }
         if let v = try? container
             .decode(Decimal.self, forKey: .boostPostExerciseMinDuration) { preferences.boostPostExerciseMinDuration = v }
 
