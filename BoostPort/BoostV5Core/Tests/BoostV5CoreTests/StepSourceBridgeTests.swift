@@ -158,4 +158,58 @@ final class StepSourceBridgeTests: XCTestCase {
         )
         XCTAssertNil(multi.sources["iphone"])
     }
+
+    // MARK: - Phone-anchored window (2026-07-02, mirrors AAPS a3bb4afc2a)
+
+    func testPhoneAnchoredWindowBridgesAWatchSwapViaThePhone() {
+        // iPhone continuous (undercounts) across two non-overlapping watch eras.
+        let phone = srcHist("iphone", Dictionary(uniqueKeysWithValues: (0 ... 19).map { ($0, 7000) }))
+        let garmin = srcHist("garmin", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 9000) })) // era 1
+        let wear = srcHist("appleWatch", Dictionary(uniqueKeysWithValues: (10 ... 19).map { ($0, 14000) })) // era 2
+        let multi = msh(phone, garmin, wear)
+
+        // Old logic: anchored on appleWatch, can't calibrate appleWatch↔garmin (no shared day) → raw.
+        let old = T.bridgedWindow(multi, activeSource: "appleWatch", todayIndex: 20)
+        XCTAssertFalse(old.calibrated)
+
+        // New logic: iPhone overlaps BOTH eras → every day expressed in phone units (~7000), calibrated.
+        let r = T.phoneAnchoredWindow(multi, todayIndex: 20)
+        XCTAssertTrue(r.calibrated)
+        XCTAssertEqual(Set(r.history.days.map(\.dayIndex)), Set(0 ... 19))
+        XCTAssertEqual(r.history.steps(forDay: 5)!, 7000) // 9000 × 7000/9000
+        XCTAssertEqual(r.history.steps(forDay: 15)!, 7000) // 14000 × 7000/14000
+        XCTAssertEqual(Set(r.donorsUsed), ["garmin", "appleWatch"])
+        XCTAssertEqual(T.baseline(r.history, todayIndex: 20)!, 7000, accuracy: 1)
+    }
+
+    func testPhoneAnchoredWindowPrefersScaledWornOverPhonesOwnDay() {
+        // Both iPhone and appleWatch have every day; appleWatch (worn, accurate) drives, scaled to phone.
+        let phone = srcHist("iphone", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 6000) }))
+        let wear = srcHist("appleWatch", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 12000) })) // 0.5
+        let r = T.phoneAnchoredWindow(msh(phone, wear), todayIndex: 10)
+        XCTAssertTrue(r.calibrated)
+        XCTAssertEqual(r.history.steps(forDay: 4)!, 6000) // 12000 × 0.5
+        XCTAssertEqual(r.history.days.first { $0.dayIndex == 4 }!.source, "appleWatch") // worn drove it
+    }
+
+    func testPhoneAnchoredWindowDuringWarmupFallsBackToPhoneDayOrRaw() {
+        // iPhone has only 2 days (< minOverlapDays) so appleWatch can't be scaled yet.
+        let phone = srcHist("iphone", [8: 7000, 9: 7000])
+        let wear = srcHist("appleWatch", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 14000) }))
+        let r = T.phoneAnchoredWindow(msh(phone, wear), todayIndex: 10)
+        XCTAssertFalse(r.calibrated) // raw fallback used
+        XCTAssertEqual(r.history.steps(forDay: 8)!, 7000) // phone's own day where it has one
+        XCTAssertEqual(r.history.steps(forDay: 0)!, 14000) // else appleWatch raw (flagged)
+    }
+
+    func testToPhoneUnitsScalesWornTodayCount() {
+        let phone = srcHist("iphone", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 7000) }))
+        let wear = srcHist("appleWatch", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 14000) })) // 0.5
+        let multi = msh(phone, wear)
+        XCTAssertEqual(T.toPhoneUnits(steps: 10000, activeSource: "appleWatch", multi: multi), 5000) // ×0.5
+        XCTAssertEqual(T.toPhoneUnits(steps: 7000, activeSource: "iphone", multi: multi), 7000) // unchanged
+        // No overlap to calibrate → returned raw.
+        let noOverlap = msh(srcHist("iphone", [0: 7000]), wear)
+        XCTAssertEqual(T.toPhoneUnits(steps: 10000, activeSource: "appleWatch", multi: noOverlap), 10000)
+    }
 }

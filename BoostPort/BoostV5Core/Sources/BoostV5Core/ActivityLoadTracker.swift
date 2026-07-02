@@ -332,6 +332,84 @@ public enum ActivityLoadTracker {
         return BridgeResult(history: hist, calibrated: !anyUncalibrated, donorsUsed: donorsUsed)
     }
 
+    /// PHONE-ANCHORED rolling window (2026-07-02, mirrors AAPS `phoneAnchoredWindow`) — the correct
+    /// frame when watches are SWAPPED, not stacked. `bridgedWindow` calibrated the old source directly
+    /// against the new one, but a watch swap means the two never share a day (one ceases as the next
+    /// starts) → zero overlap → no scale → raw forever. The iPhone runs continuously across every watch
+    /// era, so it is the one source that overlaps them all: it is the calibration frame.
+    ///
+    /// Per day in the window:
+    ///  1. if a worn source (appleWatch > garmin > …) recorded the day AND can be scaled into phone
+    ///     units (≥ `minOverlapDays` of phone↔that-source overlap), use the scaled worn value
+    ///     (worn-when-carried beats phone-when-pocketed for accuracy);
+    ///  2. else use the phone's own value for the day (the phone has every day it was carried);
+    ///  3. else (phone lacks the day and the worn source can't be scaled yet — the phone's warmup
+    ///     window) fall back to the worn value raw, flagged uncalibrated. Self-heals once the phone
+    ///     accrues `minOverlapDays` overlapping days with each worn source.
+    ///
+    /// No watch-to-watch calibration is ever needed, so a future swap can never re-open the gap.
+    public static func phoneAnchoredWindow(
+        _ multi: MultiSourceHistory,
+        todayIndex: Int,
+        windowDays: Int = Const.windowDays
+    ) -> BridgeResult {
+        let phone = multi.sources[StepSourceResolver.iphone] ?? StepHistory()
+        var phoneDays: [Int: DailyStepTotal] = [:]
+        for d in phone.days { phoneDays[d.dayIndex] = d }
+        let donors = multi.sources
+            .filter { $0.key != StepSourceResolver.iphone }
+            .sorted { StepSourceResolver.tier($0.key) < StepSourceResolver.tier($1.key) }
+
+        var out: [Int: DailyStepTotal] = [:]
+        var cals: [String: Double?] = [:] // phone/donor scale, memoised
+        var donorsUsed: [String] = []
+        var anyUncalibrated = false
+
+        for day in (todayIndex - windowDays) ..< todayIndex {
+            let phoneDay = phoneDays[day]
+            // highest-trust worn source that recorded this day (whether or not it scales)
+            let worn = donors.first { $0.value.steps(forDay: day) != nil }
+            if let worn {
+                let raw = worn.value.steps(forDay: day)!
+                let cal: Double?
+                if cals.keys.contains(worn.key) {
+                    cal = cals[worn.key]!
+                } else {
+                    cal = calibration(active: phone, donor: worn.value) // median(phone/worn)
+                    cals[worn.key] = cal
+                }
+                if let cal {
+                    out[day] = DailyStepTotal(dayIndex: day, steps: Int(Double(raw) * cal), source: worn.key)
+                    if !donorsUsed.contains(worn.key) { donorsUsed.append(worn.key) }
+                } else if let phoneDay {
+                    out[day] = phoneDay // can't scale → phone's own day
+                } else {
+                    out[day] = DailyStepTotal(dayIndex: day, steps: raw, source: worn.key)
+                    if !donorsUsed.contains(worn.key) { donorsUsed.append(worn.key) }
+                    anyUncalibrated = true
+                }
+            } else if let phoneDay {
+                out[day] = phoneDay
+            }
+        }
+
+        let hist = StepHistory(days: out.values.sorted { $0.dayIndex < $1.dayIndex })
+        return BridgeResult(history: hist, calibrated: !anyUncalibrated, donorsUsed: donorsUsed)
+    }
+
+    /// Express `steps` reported by `activeSource` in PHONE-equivalent units, so today's live count
+    /// matches the phone-anchored baseline. Phone/unknown/no-overlap → returned unchanged; a worn
+    /// source with enough phone overlap → scaled by median(phone/worn). (2026-07-02, AAPS `toPhoneUnits`.)
+    public static func toPhoneUnits(steps: Int, activeSource: String?, multi: MultiSourceHistory) -> Int {
+        guard let activeSource else { return steps }
+        let src = StepSourceResolver.canonical(activeSource)
+        if src == StepSourceResolver.iphone { return steps }
+        guard let phone = multi.sources[StepSourceResolver.iphone] else { return steps }
+        guard let srcHist = multi.sources[src] else { return steps }
+        guard let cal = calibration(active: phone, donor: srcHist) else { return steps }
+        return Int(Double(steps) * cal)
+    }
+
     // MARK: - Helpers
 
     /// Matches Kotlin `coerceIn(0.0, 1.0)`.
