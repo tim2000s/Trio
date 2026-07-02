@@ -144,6 +144,8 @@ struct FeatureSettingsView: BaseView {
                 Toggle("Disable with COB", isOn: $state.boostNightModeDisableWithCob)
                 Toggle("Disable with low TT", isOn: $state.boostNightModeDisableWithLowTt)
                 Toggle("Auto by sleep", isOn: $state.boostNightModeAutoBySleep)
+                boostSlider("Sleep-in hours", $state.boostSleepInHours, in: 0 ... 18, step: 0.5)
+                boostSlider("Sleep-in steps (60m)", $state.boostSleepInSteps, in: 0 ... 1000, step: 50)
             }
             .listRowBackground(Color.chart)
 
