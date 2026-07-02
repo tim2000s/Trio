@@ -52,10 +52,22 @@ public enum MealHypothesisConstants {
     public static let fastConfirmDelta = 8.0
     public static let fastConfirmAccl = 15.0
     public static let fastConfirmScore = 0.60
+    /// 2026-07-02 post-hypo rescue-carb guard: the fast-carb fast-path is suppressed when the 60-min
+    /// BG low is below this. A rescue-carb rebound routinely satisfies delta≥8 + accl≥15 + score≥0.60,
+    /// and the fast path is EXEMPT from the confirmDoseAdequate gate — so it was the only unguarded
+    /// CONFIRMED entry within an hour of a hypo. Replay-calibrated (AAPS 1245d33a9a).
+    public static let fastConfirmMinRecentLowMgdl = 80.0
     public static let timeJumpResetMinutes = 30.0
 }
 
 public enum MealHypothesisEngine {
+    /// Effective fast-carb fast-path enable for this cycle: the user toggle AND the post-hypo
+    /// rescue-carb guard (`fastConfirmMinRecentLowMgdl`). Computed by the caller (`decide()`) and
+    /// passed to `step` as `fastConfirmEnabled` — same pattern as `confirmDoseAdequate`. (AAPS 1245d33a9a)
+    public static func fastConfirmAllowed(_ fastCarbConfirmEnabled: Bool, recentLowBg: Double) -> Bool {
+        fastCarbConfirmEnabled && recentLowBg >= MealHypothesisConstants.fastConfirmMinRecentLowMgdl
+    }
+
     /// Single-step transition. Pure; caller threads state across cycles.
     public static func step(
         current: MealHypothesisState,
