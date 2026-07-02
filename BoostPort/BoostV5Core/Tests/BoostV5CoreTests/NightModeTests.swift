@@ -30,6 +30,7 @@ final class NightModeTests: XCTestCase {
         cob: Double = 0,
         tt: Double? = nil,
         sleepActive: Bool = false,
+        sleepInActive: Bool = false,
         config: NightModeConfig
     ) -> NightModeInputs {
         NightModeInputs(
@@ -39,6 +40,7 @@ final class NightModeTests: XCTestCase {
             cob: cob,
             activeTempTargetMgdl: tt,
             sleepActive: sleepActive,
+            sleepInActive: sleepInActive,
             config: config
         )
     }
@@ -134,6 +136,24 @@ final class NightModeTests: XCTestCase {
         let r = NightMode.evaluate(inputs(now: 720, bg: 100, sleepActive: true, config: cfg))
         XCTAssertTrue(r.active)
         XCTAssertEqual(r.reason, "active")
+    }
+
+    // MARK: sleepInActive (morning lie-in) activates outside the window, ungated by autoBySleep
+
+    func testSleepInActiveActivatesOutsideWindowRegardlessOfAutoBySleep() {
+        // Outside the clock window (12:00) with autoBySleep OFF: a step-based lie-in still enables
+        // night mode so its SMB rules apply during the lie-in. (2026-07-02)
+        let cfg = config(autoBySleep: false)
+        let r = NightMode.evaluate(inputs(now: 720, bg: 100, sleepActive: false, sleepInActive: true, config: cfg))
+        XCTAssertTrue(r.active)
+        XCTAssertTrue(r.suppressSmb)
+    }
+
+    func testNoSleepInActiveOutsideWindowStaysInactive() {
+        let cfg = config(autoBySleep: false)
+        let r = NightMode.evaluate(inputs(now: 720, bg: 100, sleepActive: false, sleepInActive: false, config: cfg))
+        XCTAssertFalse(r.active)
+        XCTAssertEqual(r.reason, "outside-window")
     }
 
     func testSleepActiveIgnoredWhenAutoBySleepOff() {

@@ -182,7 +182,17 @@ struct OpenAPSSwift {
                     // backs off and the base (V1-equivalent) SMB stands, which night mode then suppresses.
                     // `asleep` = SleepStateDetector SLEEPING via the activity snapshot (staleness-guarded).
                     let asleep = BoostActivityStore.shared.flags(now: clock).asleep
-                    if microBolusAllowed, !asleep {
+                    // Boost-inactive gate (2026-07-02, faithful port of OpenAPSBoostPlugin.kt c94c5c72d6):
+                    // the V6 override may replace the SMB ONLY when Boost is active this cycle. Boost is
+                    // active only OUTSIDE the night/sleep period (night window OR HR/step sleep, EXCLUDING
+                    // night mode's BG/COB/TT gates so a nocturnal high can't re-enable an amplified V6 dose
+                    // while asleep) and outside a step-based morning lie-in. Otherwise fall back to V1's
+                    // base oref1 SMB (which respects night mode + its own hypo/minGuard gates) — because
+                    // `asleep` reflects ONLY the HR sleep-state machine, never the boost-window gate.
+                    let sleepInActive = BoostV5Adapter.sleepInActive(preferences: preferences, clock: clock)
+                    let boostActive = !BoostV5Adapter.isInNightSleepPeriod(preferences: preferences, clock: clock)
+                        && !sleepInActive
+                    if microBolusAllowed, !asleep, boostActive {
                         // Anti-stacking hard gate — faithful port of OpenAPSBoostPlugin.kt:1262. The
                         // rolling-60-min cumulative-SMB cap bounds dose FREQUENCY (per-shot caps don't);
                         // suppress the V6 SMB this cycle once the last hour's SMB volume reaches it.
@@ -245,6 +255,10 @@ struct OpenAPSSwift {
                         }
                     } else if asleep {
                         det.reason += " V6 suppressed (SLEEPING) — base SMB stands;"
+                    } else if !boostActive {
+                        det.reason += sleepInActive
+                            ? " V6 override skipped (Boost inactive: morning lie-in) — base SMB stands;"
+                            : " V6 override skipped (Boost inactive: night/sleep period) — base SMB stands;"
                     }
                     // AAPS night mode compares against the BASE profile target (pre-TT) and
                     // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).
@@ -258,6 +272,7 @@ struct OpenAPSSwift {
                         preferences: preferences,
                         baseProfileTargetMgdl: baseTarget,
                         activeTempTargetMgdl: activeTt,
+                        sleepInActive: sleepInActive,
                         clock: clock
                     )
                     if night.suppress {

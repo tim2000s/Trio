@@ -40,6 +40,8 @@ extension Settings {
         @Published var boostNightModeDisableWithCob: Bool = false
         @Published var boostNightModeDisableWithLowTt: Bool = false
         @Published var boostNightModeAutoBySleep: Bool = false
+        @Published var boostSleepInHours: Decimal = 2.0
+        @Published var boostSleepInSteps: Decimal = 250
         @Published var boostV6PreMealEnabled: Bool = false
         @Published var boostV6PreMealTargetMgdl: Decimal = 72
         @Published var boostV6PreMealLeadMin: Decimal = 60
@@ -110,6 +112,8 @@ extension Settings {
                 boostNightModeDisableWithLowTt = $0 }
             subscribePreferencesSetting(\.boostNightModeAutoBySleep, on: $boostNightModeAutoBySleep) {
                 boostNightModeAutoBySleep = $0 }
+            subscribePreferencesSetting(\.boostSleepInHours, on: $boostSleepInHours) { boostSleepInHours = $0 }
+            subscribePreferencesSetting(\.boostSleepInSteps, on: $boostSleepInSteps) { boostSleepInSteps = $0 }
             subscribePreferencesSetting(\.boostV6PreMealEnabled, on: $boostV6PreMealEnabled) { boostV6PreMealEnabled = $0 }
             subscribePreferencesSetting(\.boostV6PreMealTargetMgdl, on: $boostV6PreMealTargetMgdl) {
                 boostV6PreMealTargetMgdl = $0 }

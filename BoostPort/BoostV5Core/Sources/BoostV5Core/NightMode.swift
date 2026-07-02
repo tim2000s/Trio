@@ -64,6 +64,10 @@ public struct NightModeInputs: Equatable, Sendable {
     public var activeTempTargetMgdl: Double?
     /// Sleep detector reports a non-AWAKE state.
     public var sleepActive: Bool
+    /// Step-based morning lie-in is in effect (steps below threshold within `sleepInHours` of night
+    /// end). Ungated by `autoBySleep` — the false-AWAKE backstop applies regardless — so night-mode
+    /// SMB rules also apply during a lie-in. (2026-07-02, mirrors AAPS c94c5c72d6.)
+    public var sleepInActive: Bool
     public var config: NightModeConfig
 
     public init(
@@ -73,6 +77,7 @@ public struct NightModeInputs: Equatable, Sendable {
         cob: Double,
         activeTempTargetMgdl: Double?,
         sleepActive: Bool,
+        sleepInActive: Bool = false,
         config: NightModeConfig
     ) {
         self.nowMinuteOfDay = nowMinuteOfDay
@@ -81,6 +86,7 @@ public struct NightModeInputs: Equatable, Sendable {
         self.cob = cob
         self.activeTempTargetMgdl = activeTempTargetMgdl
         self.sleepActive = sleepActive
+        self.sleepInActive = sleepInActive
         self.config = config
     }
 }
@@ -125,7 +131,9 @@ public enum NightMode {
             end: cfg.endMinute
         )
         let sleepActive = cfg.autoBySleep && inputs.sleepActive
-        guard inWindow || sleepActive else {
+        // A step-based morning lie-in also counts as "in the night/sleep period" so night-mode SMB
+        // rules apply during a lie-in — ungated by autoBySleep, the false-AWAKE backstop. (2026-07-02)
+        guard inWindow || sleepActive || inputs.sleepInActive else {
             return NightModeResult(active: false, suppressSmb: false, targetMgdl: target, reason: "outside-window")
         }
 

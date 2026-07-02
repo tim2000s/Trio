@@ -7,6 +7,9 @@ import Foundation
 /// post-exercise machine states so the monitor can advance them cycle-to-cycle.
 struct BoostActivitySnapshot: Codable, Sendable {
     var steps30min: Double
+    // 60-min step total — the steps-based sleep-in (lie-in) backstop reads this (2026-07-02). Optional
+    // so snapshots persisted before this field decode (missing → nil, treated as no step data).
+    var steps60min: Double? = nil
     var latestHeartRate: Double // most recent HR sample (bpm), 0 if none
     var restingHeartRate: Double // Apple's resting HR baseline (bpm), 0 if unavailable
 

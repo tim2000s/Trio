@@ -91,6 +91,11 @@ struct Preferences: JSON, Equatable {
     var boostNightModeDisableWithCob: Bool = false
     var boostNightModeDisableWithLowTt: Bool = false
     var boostNightModeAutoBySleep: Bool = false
+    // Steps-based sleep-in (lie-in) backstop: within this many hours of night end, 60-min steps below
+    // the threshold keep Boost suppressed even if the HR sleep-state machine wrongly reported AWAKE.
+    // Defaults match AAPS (ApsBoostSleepInHours 2.0, ApsBoostSleepInSteps 250).
+    var boostSleepInHours: Decimal = 2.0 // 0…18
+    var boostSleepInSteps: Decimal = 250 // 0…1000
     // V6 anticipatory pre-meal target.
     var boostV6PreMealEnabled: Bool = false
     var boostV6PreMealTargetMgdl: Decimal = 72
@@ -192,6 +197,8 @@ extension Preferences {
         case boostNightModeDisableWithCob
         case boostNightModeDisableWithLowTt
         case boostNightModeAutoBySleep
+        case boostSleepInHours
+        case boostSleepInSteps
         case boostV6PreMealEnabled
         case boostV6PreMealTargetMgdl
         case boostV6PreMealLeadMin
@@ -527,6 +534,12 @@ extension Preferences: Decodable {
         }
         if let v = try? container.decode(Bool.self, forKey: .boostNightModeAutoBySleep) {
             preferences.boostNightModeAutoBySleep = v
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostSleepInHours) {
+            preferences.boostSleepInHours = max(0, min(18, v))
+        }
+        if let v = try? container.decode(Decimal.self, forKey: .boostSleepInSteps) {
+            preferences.boostSleepInSteps = max(0, min(1000, v))
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV6PreMealEnabled) {
             preferences.boostV6PreMealEnabled = v
