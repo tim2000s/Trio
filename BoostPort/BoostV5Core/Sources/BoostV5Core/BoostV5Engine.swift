@@ -159,8 +159,13 @@ public enum BoostV5Engine {
         // is elevated. Clamped strictly below confirmedCapU so a manual committedCap ≥ confirmedCap
         // can't make the gate unsatisfiable (which would silently disable V6 meal response). Fast-carb
         // fast-path is exempt (handled inside step()).
+        // 2026-07-02 (9545323fb1): size the shot as it would actually DELIVER — including velocity
+        // scaling — not the pre-velocity raw. Backtest: 35.8% of raw-gate passes delivered BELOW the
+        // floor after velocity scaling, re-creating the starvation the gate exists to prevent. The
+        // velocityFactor is hoisted here (pure fn of inputs) and reused for the delivered dose below.
+        let velocityFactor = SafetyGates.velocityScaledDoseFactor(inputs.cumulativeRise30min)
         let prospectiveConfirmShot = budget.budget *
-            MealActionMultiplier.value(for: .confirmed, aggressionUserKnob: inputs.aggressionUserKnob)
+            MealActionMultiplier.value(for: .confirmed, aggressionUserKnob: inputs.aggressionUserKnob) * velocityFactor
         let confirmDoseFloor = min(
             inputs.committedCapU,
             MealHypothesisConstants.confirmDoseFloorMaxFracOfConfirmedCap * inputs.confirmedCapU
@@ -172,13 +177,18 @@ public enum BoostV5Engine {
             targetBg: inputs.targetBg, delta: inputs.delta, deltaAccl: inputs.deltaAccl,
             deltaDeclining: MealHypothesisEngine.deltaDeclining(inputs.deltaHistory, windowCycles: 2),
             asleep: inputs.asleep, exerciseActive: inputs.exerciseActive,
-            fastConfirmEnabled: inputs.fastCarbConfirmEnabled,
+            // 2026-07-02 (1245d33a9a): post-hypo rescue-carb guard — the fast-carb fast-path is
+            // suppressed when the 60-min low is below the rescue threshold, since a rescue-carb rebound
+            // routinely satisfies the fast-path signals yet is exempt from the confirmDoseAdequate gate.
+            fastConfirmEnabled: MealHypothesisEngine.fastConfirmAllowed(
+                inputs.fastCarbConfirmEnabled, recentLowBg: inputs.recentLowBg
+            ),
             confirmDoseAdequate: confirmDoseAdequate
         )
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
         let rawInsulinToDeliver = budget.budget * actionMult
-        let velocityFactor = SafetyGates.velocityScaledDoseFactor(inputs.cumulativeRise30min)
+        // velocityFactor hoisted above the confirm dose gate (reused here). (2026-07-02, 9545323fb1)
         let velocityScaled = rawInsulinToDeliver * velocityFactor
         let insulinToDeliver = SafetyGates.applyStateDoseCap(
             newHypothesisState.state,

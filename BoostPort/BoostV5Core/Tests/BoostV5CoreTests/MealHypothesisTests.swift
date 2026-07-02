@@ -288,4 +288,36 @@ final class MealHypothesisTests: XCTestCase {
         )
         XCTAssertEqual(r.state, .confirmed)
     }
+
+    // MARK: post-hypo rescue-carb guard on the fast-carb fast-path (2026-07-02, AAPS 1245d33a9a)
+
+    func testRescueGuardSuppressesFastPathNearHypo() {
+        // 60-min low 55 (rescue-carb rebound): guard off → fast path must NOT confirm.
+        XCTAssertFalse(E.fastConfirmAllowed(true, recentLowBg: 55))
+        let r = E.step(
+            current: idle(), score: S, eventualBg: 150, targetBg: 100, delta: D, deltaAccl: A,
+            deltaDeclining: false, asleep: false, exerciseActive: false,
+            fastConfirmEnabled: E.fastConfirmAllowed(true, recentLowBg: 55)
+        )
+        XCTAssertNotEqual(r.state, .confirmed)
+    }
+
+    func testRescueGuardBoundary() {
+        // Exactly 80 allows; just below blocks.
+        XCTAssertTrue(E.fastConfirmAllowed(true, recentLowBg: MealHypothesisConstants.fastConfirmMinRecentLowMgdl))
+        XCTAssertFalse(E.fastConfirmAllowed(true, recentLowBg: MealHypothesisConstants.fastConfirmMinRecentLowMgdl - 0.1))
+    }
+
+    func testRescueGuardPassesThroughDisabledToggle() {
+        XCTAssertFalse(E.fastConfirmAllowed(false, recentLowBg: 150))
+    }
+
+    func testNoRecentLowFastPathFires() {
+        let r = E.step(
+            current: idle(), score: S, eventualBg: 150, targetBg: 100, delta: D, deltaAccl: A,
+            deltaDeclining: false, asleep: false, exerciseActive: false,
+            fastConfirmEnabled: E.fastConfirmAllowed(true, recentLowBg: 110)
+        )
+        XCTAssertEqual(r.state, .confirmed)
+    }
 }
