@@ -158,15 +158,16 @@ public enum NightMode {
     /// Circular minute-of-day window membership: `[start, end)`.
     ///
     /// Mirrors the Kotlin midnight-wrap logic (`if (end > start) now in start until end else wrap`).
-    /// `end > start` → half-open interval; otherwise it wraps midnight (e.g. 22:00→07:00). When
-    /// `start == end` AAPS takes the wrap branch which, in absolute-ms terms, covers the full 24h →
-    /// always in window (matching AAPS, not an empty window).
+    /// `end > start` → half-open interval; `end < start` wraps midnight (e.g. 22:00→07:00). When
+    /// `start == end` the window is EMPTY (2026-07-02, AAPS 8ecaf7bbd9): it previously covered the
+    /// full 24h → always-night, which silently made V6 never dose; HR/step sleep detection still
+    /// governs the night via the caller.
     static func minuteInWindow(now: Int, start: Int, end: Int) -> Bool {
+        if start == end { return false } // empty window
         if end > start {
             return now >= start && now < end
         }
-        // end <= start (incl. start == end): wraps midnight → [start, 1440) ∪ [0, end).
-        // For start == end this is the whole day (always active), matching AAPS.
-        return start == end ? true : (now >= start || now < end)
+        // end < start: wraps midnight → [start, 1440) ∪ [0, end).
+        return now >= start || now < end
     }
 }

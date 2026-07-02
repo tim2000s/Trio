@@ -37,8 +37,47 @@ enum BoostMLModels {
     static func hypoFeatureNames() -> [String]? { hypo.model?.featureNames }
 
     /// P(hypo event in next 4h) from a full feature vector (v12: 53 features built by
-    /// `BoostMlFeatureBuilder`), or nil if the model couldn't load.
-    static func hypoRisk(vector: [Double]) -> Double? { hypo.model?.predict(vector) }
+    /// `BoostMlFeatureBuilder`), or nil if the model couldn't load. Caches this cycle's vector so
+    /// `hypoRiskAtProjectedIob` can re-score at the projected post-SMB IOB. (2026-07-02, AAPS 921a56ea27)
+    static func hypoRisk(vector: [Double]) -> Double? {
+        featuresLock.lock()
+        lastHypoFeatures = vector
+        featuresLock.unlock()
+        return hypo.model?.predict(vector)
+    }
+
+    // Most recent hypo feature vector scored this cycle (the v12 windowed-lookback vector). Basis for
+    // hypoRiskAtProjectedIob. (2026-07-02)
+    private static let featuresLock = NSLock()
+    private static var lastHypoFeatures: [Double]?
+
+    /// Re-score the hypo-risk model at the PROJECTED post-SMB state (current IOB + prospective dose),
+    /// reusing this cycle's cached feature vector with the post-state features adjusted: `iob_iob` AND
+    /// `iob_iob_lag0` (the schema duplicates current IOB in the lookback block — both must move or the
+    /// vector is internally inconsistent), `iob_bolusiob` += Δ, `recent_smb_units_60m` (+lag0) += Δ,
+    /// `time_since_last_smb_min` := 0. History lags untouched. Powers V5 Phase-3 `postActionRiskCheck`.
+    /// Returns nil (→ gate passes through) when the model/vector/feature names are unavailable or the
+    /// cached vector doesn't match the model's schema. Mirrors AAPS `predictAtProjectedIob`.
+    static func hypoRiskAtProjectedIob(_ projectedIob: Double) -> Double? {
+        guard let model = hypo.model else { return nil }
+        let names = model.featureNames
+        featuresLock.lock()
+        let base = lastHypoFeatures
+        featuresLock.unlock()
+        guard var f = base, f.count == names.count,
+              let iobIdx = names.firstIndex(of: "iob_iob"), iobIdx < f.count else { return nil }
+        let delta = projectedIob - f[iobIdx]
+        f[iobIdx] = projectedIob
+        func set(_ name: String, _ v: (Double) -> Double) {
+            if let i = names.firstIndex(of: name), i < f.count { f[i] = v(f[i]) }
+        }
+        set("iob_iob_lag0") { _ in projectedIob }
+        set("iob_bolusiob") { max(0.0, $0 + delta) }
+        set("recent_smb_units_60m") { max(0.0, $0 + delta) }
+        set("recent_smb_units_60m_lag0") { max(0.0, $0 + delta) }
+        set("time_since_last_smb_min") { _ in 0.0 }
+        return model.predict(f)
+    }
 
     /// P(BG peak ≥ current+50 within 90 min) in [0,1], or nil if the model couldn't load.
     static func mealLikely(_ f: Features) -> Double? { meal.model?.predict(f.vector) }
