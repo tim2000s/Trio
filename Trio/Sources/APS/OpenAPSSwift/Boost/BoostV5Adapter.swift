@@ -252,6 +252,7 @@ enum BoostV5Adapter {
         preferences: Preferences,
         baseProfileTargetMgdl: Double,
         activeTempTargetMgdl: Double?,
+        sleepInActive: Bool = false,
         clock: Date
     ) -> (suppress: Bool, reason: String) {
         guard preferences.boostNightModeEnabled else { return (false, "") }
@@ -278,9 +279,56 @@ enum BoostV5Adapter {
             cob: dbl(determination.cob) ?? 0,
             activeTempTargetMgdl: activeTempTargetMgdl,
             sleepActive: sleepActive,
+            sleepInActive: sleepInActive,
             config: config
         ))
         return (result.suppressSmb, result.reason)
+    }
+
+    /// Minute-of-day membership of `[start, end)` on a 24-hour clock, wrapping midnight when
+    /// `end <= start`. Mirrors `NightMode.minuteInWindow`.
+    static func minuteInWrapped(_ now: Int, _ start: Int, _ end: Int) -> Bool {
+        if end > start { return now >= start && now < end }
+        return start == end ? true : (now >= start || now < end)
+    }
+
+    /// Local minute-of-day [0, 1440) for `clock`.
+    private static func minuteOfDay(_ clock: Date) -> Int {
+        Calendar.current.component(.hour, from: clock) * 60 + Calendar.current.component(.minute, from: clock)
+    }
+
+    /// Pre-BG-gate "user is in their night/sleep period" — the night time window OR HR/step sleep
+    /// detection, gated by the night-mode master toggle. This is the sleep-aware signal that gates the
+    /// Boost active override (`boostActive = !this`). It deliberately EXCLUDES the BG / COB / low-TT
+    /// gates that `nightMode()` layers on: those must NOT influence the Boost gate, or a nocturnal high
+    /// would flip Boost back on and re-fire a V6 dose while asleep. Sleep state is staleness-guarded
+    /// (≤30 min) exactly as `nightMode()`'s sleepActive is. (2026-07-02, mirrors AAPS c94c5c72d6.)
+    static func isInNightSleepPeriod(preferences: Preferences, clock: Date) -> Bool {
+        guard preferences.boostNightModeEnabled else { return false }
+        let start = Int((dbl(preferences.boostNightModeStartHour) ?? 22) * 60)
+        let end = Int((dbl(preferences.boostNightModeEndHour) ?? 7) * 60)
+        let inWindow = minuteInWrapped(minuteOfDay(clock), start, end)
+        let sleepState = BoostActivityStore.shared.snapshot
+            .flatMap { clock.timeIntervalSince($0.updatedAt) <= 1800 ? ($0.sleepState?.state ?? .awake) : nil } ?? .awake
+        let sleepActive = preferences.boostNightModeAutoBySleep && sleepState != .awake
+        return inWindow || sleepActive
+    }
+
+    /// Steps-based sleep-in (lie-in) — the FALSE-AWAKE backstop. In the first `boostSleepInHours` after
+    /// night end, 60-min steps below `boostSleepInSteps` ⇒ still lying in even if the HR sleep-state
+    /// machine wrongly reported AWAKE; keeps Boost suppressed and (via `nightMode`) applies night-mode
+    /// SMB rules. Requires a FRESH snapshot (≤30 min): without live step data we can't confirm a lie-in,
+    /// and the HR sleep gate already covers the still-asleep case — so we don't assert one on stale
+    /// data. (2026-07-02, mirrors AAPS c94c5c72d6; Trio reads steps from the async snapshot.)
+    static func sleepInActive(preferences: Preferences, clock: Date) -> Bool {
+        let sleepInMinutes = Int((dbl(preferences.boostSleepInHours) ?? 2.0) * 60)
+        guard sleepInMinutes > 0 else { return false }
+        let nightEnd = Int((dbl(preferences.boostNightModeEndHour) ?? 7) * 60)
+        let windowEnd = (nightEnd + sleepInMinutes) % 1440
+        guard minuteInWrapped(minuteOfDay(clock), nightEnd, windowEnd) else { return false }
+        guard let steps60 = BoostActivityStore.shared.snapshot
+            .flatMap({ clock.timeIntervalSince($0.updatedAt) <= 1800 ? $0.steps60min : nil }) else { return false }
+        return steps60 < (dbl(preferences.boostSleepInSteps) ?? 250)
     }
 
     /// Compact telemetry string appended to the determination reason (shadow + active).

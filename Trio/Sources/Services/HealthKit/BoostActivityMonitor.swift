@@ -276,6 +276,7 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
 
         let snap = BoostActivitySnapshot(
             steps30min: steps30,
+            steps60min: Double(steps60),
             latestHeartRate: latestHr,
             restingHeartRate: restingHr,
             exerciseActive: activity.exerciseActive,
