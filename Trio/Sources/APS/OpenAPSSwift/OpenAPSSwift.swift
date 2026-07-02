@@ -201,6 +201,21 @@ struct OpenAPSSwift {
                         let cumulativeCapReached = cumulativeCap > 0 && recentSmb60 >= cumulativeCap
                         var boostDose = Decimal(result.decision.finalDose)
 
+                        // Non-meal-state cap (2026-07-02, faithful port of OpenAPSBoostPlugin.kt
+                        // 5b5026e10b): V6 may only OUT-dose V1 when it holds a meal hypothesis
+                        // (CONFIRMED/COMMITTED). In IDLE/OBSERVING/RECOVERING the V5 state caps don't
+                        // apply and IDLE's 1.0× multiplier can front a multi-unit correction that
+                        // bypasses V1's per-SMB sizing (cohort shadow: ~1,430U cumulative IDLE excess,
+                        // worst 3.7U vs V1 0.45U, incl. 2.0U where V1 dosed 0). Capping at V1's
+                        // would-dose makes IDLE match its spec ("standard oref dose"); genuine meal
+                        // rises still get full V6 dosing via OBSERVING→CONFIRMED.
+                        let v1WouldDose = det.units ?? 0
+                        let inMealState = result.decision.mealHypothesis == .confirmed
+                            || result.decision.mealHypothesis == .committed
+                        let preNonMealCapDose = boostDose
+                        if !inMealState { boostDose = min(boostDose, v1WouldDose) }
+                        let nonMealCapped = boostDose < preNonMealCapDose
+
                         // Honour the user's explicit "no SMB" levers even in active mode: master
                         // SMB-off, the scheduled SMB-off window, and a high temp target with "Allow
                         // SMB with high temp target" off (the exercise/illness back-off). The active
@@ -250,6 +265,12 @@ struct OpenAPSSwift {
                                 " V6 suppressed (cumulative SMB cap \(String(format: "%.2f", recentSmb60))U/\(String(format: "%.2f", cumulativeCap))U reached);"
                         } else if let age = lastBolusAgeMin, age > smbInterval {
                             det.units = boostDose
+                            if nonMealCapped {
+                                det.reason += " V6 non-meal-capped to V1 base " +
+                                    "\(String(format: "%.3f", (v1WouldDose as NSDecimalNumber).doubleValue))U (from " +
+                                    "\(String(format: "%.3f", (preNonMealCapDose as NSDecimalNumber).doubleValue))U, " +
+                                    "state=\(result.decision.mealHypothesis.rawValue));"
+                            }
                         } else {
                             det.reason += " V6 SMB held (\(smbInterval)m SMB interval not elapsed);"
                         }
