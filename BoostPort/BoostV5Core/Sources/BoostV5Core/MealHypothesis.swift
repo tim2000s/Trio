@@ -36,6 +36,10 @@ public enum MealHypothesisConstants {
     public static let confirmScore = 0.55
     public static let confirmEventualBgOffsetMgdl = 30.0
     public static let confirmMinObservingAge = 2
+    /// 2026-07-02 dose-adequacy gate: the confirm floor is committedCapU, clamped to at most this
+    /// fraction of confirmedCapU so a manual committedCap ≥ confirmedCap can't make the gate
+    /// unsatisfiable (which would silently disable V6's meal response). See BoostV5Engine.decide().
+    public static let confirmDoseFloorMaxFracOfConfirmedCap = 0.8
     public static let fallBackToIdleScore = 0.36
     public static let fallBackToIdleAge = 2
     public static let confirmedToCommittedAge = 0
@@ -63,7 +67,12 @@ public enum MealHypothesisEngine {
         deltaDeclining: Bool,
         asleep: Bool = false,
         exerciseActive: Bool = false,
-        fastConfirmEnabled: Bool = false
+        fastConfirmEnabled: Bool = false,
+        // 2026-07-02: OBSERVING→CONFIRMED dose-adequacy gate. Caller sets it true when the prospective
+        // commit-shot (budget × CONFIRMED mult) exceeds one routine COMMITTED hold (committedCapU,
+        // clamped < confirmedCapU). Defaults true so the fast-carb path and existing callers/tests are
+        // unaffected.
+        confirmDoseAdequate: Bool = true
     ) -> MealHypothesisState {
         let C = MealHypothesisConstants.self
         let state = current.state
@@ -99,6 +108,7 @@ public enum MealHypothesisEngine {
             let confirmEligible = age >= C.confirmMinObservingAge &&
                 newMaxScore >= C.confirmScore &&
                 newMaxOffset >= C.confirmEventualBgOffsetMgdl &&
+                confirmDoseAdequate && // 2026-07-02: don't spend the token on a shot < one COMMITTED hold
                 !committedInSession
             if fastConfirm, !committedInSession {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
