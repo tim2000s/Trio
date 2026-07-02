@@ -250,16 +250,25 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             )
         }
         let stepRes = StepSourceResolver.resolve(states)
-        let bridged = ActivityLoadTracker.bridgedWindow(multi, activeSource: stepRes.active, todayIndex: todayIndex)
+        // Baseline from the PHONE-ANCHORED rolling window — the iPhone runs continuously across watch
+        // SWAPS (one watch ceases as the next starts → they never overlap), so it is the calibration
+        // frame; worn sources are scaled into phone units. Replaces watch-to-watch bridging, which
+        // could never calibrate a swap. (2026-07-02, AAPS a3bb4afc2a.)
+        let bridged = ActivityLoadTracker.phoneAnchoredWindow(multi, todayIndex: todayIndex)
         let load = ActivityLoadTracker.compute(bridged.history, todayIndex: todayIndex)
+        // Intraday "running hot?" — today's count converted to PHONE units so it matches the
+        // phone-anchored baseline (worn-source today × phone/worn calibration).
+        let stepsTodayPhone = ActivityLoadTracker.toPhoneUnits(
+            steps: stepRes.stepsToday, activeSource: stepRes.active, multi: multi
+        )
         let intraday = ActivityLoadTracker.intradayLoad(
-            stepsToday: stepRes.stepsToday,
+            stepsToday: stepsTodayPhone,
             baseline: load.baselineSteps,
             hourOfDay: Calendar.current.component(.hour, from: now)
         )
         let bridgeNote = bridged.donorsUsed.isEmpty
-            ? "none"
-            : bridged.donorsUsed.joined(separator: "+") + (bridged.calibrated ? "" : "(raw)")
+            ? "phone"
+            : "phone<-" + bridged.donorsUsed.joined(separator: "+") + (bridged.calibrated ? "" : "(raw)")
 
         // 5) HR source visibility (SHADOW) — which device feeds HR + silent-death detection.
         let hrSourceReadings = await fetchHrSourceReadings(since: now.addingTimeInterval(-16 * 60), now: now)
