@@ -236,4 +236,56 @@ final class MealHypothesisTests: XCTestCase {
         XCTAssertFalse(E.deltaDeclining([3, 6, 10]))
         XCTAssertFalse(E.deltaDeclining([5, 5]))
     }
+
+    // MARK: OBSERVING→CONFIRMED dose-adequacy gate (2026-07-02, mirrors AAPS 4bfd7bea32)
+
+    // An OBSERVING run that already satisfies the score + eventualBG-offset peaks and the age gate, so
+    // the ONLY remaining variable is confirmDoseAdequate.
+    private func observedReady() -> MealHypothesisState {
+        MealHypothesisState(
+            state: .observing, ageCycles: 2,
+            maxScoreInObserving: 0.60, maxEventualBgOffsetInObserving: 40.0, committedInSession: false
+        )
+    }
+
+    func testConfirmsWhenShotAdequate() {
+        let r = E.step(
+            current: observedReady(), score: 0.60, eventualBg: 150, targetBg: 100,
+            delta: 6, deltaAccl: 2, deltaDeclining: false, confirmDoseAdequate: true
+        )
+        XCTAssertEqual(r.state, .confirmed)
+    }
+
+    func testDoesNotConfirmWhenShotInadequateHoldsInObserving() {
+        // All other confirm predicates pass; only the dose floor blocks it. Score is above the
+        // fall-back threshold, so it holds in OBSERVING rather than dropping to IDLE.
+        let r = E.step(
+            current: observedReady(), score: 0.60, eventualBg: 150, targetBg: 100,
+            delta: 6, deltaAccl: 2, deltaDeclining: false, confirmDoseAdequate: false
+        )
+        XCTAssertEqual(r.state, .observing)
+    }
+
+    func testDefaultArgPreservesLegacyConfirm() {
+        let r = E.step(
+            current: observedReady(), score: 0.60, eventualBg: 150, targetBg: 100,
+            delta: 6, deltaAccl: 2, deltaDeclining: false
+        )
+        XCTAssertEqual(r.state, .confirmed)
+    }
+
+    func testFastCarbPathNotGatedByDoseAdequacy() {
+        // Sharp, corroborated rise with the toggle on still confirms in one cycle even when
+        // confirmDoseAdequate=false — the fast-path is intentionally exempt.
+        let r = E.step(
+            current: MealHypothesisState(
+                state: .observing, ageCycles: 0,
+                maxScoreInObserving: 0.5, maxEventualBgOffsetInObserving: 10.0, committedInSession: false
+            ),
+            score: 0.7, eventualBg: 150, targetBg: 100, delta: 12, deltaAccl: 30,
+            deltaDeclining: false, asleep: false, exerciseActive: false,
+            fastConfirmEnabled: true, confirmDoseAdequate: false
+        )
+        XCTAssertEqual(r.state, .confirmed)
+    }
 }

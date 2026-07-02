@@ -142,18 +142,38 @@ public enum BoostV5Engine {
             cumulativeRise30min: inputs.cumulativeRise30min, mlMealLikelyNullStreak: nextNullStreak
         )
 
+        // AggressionBudget is HOISTED above the state step — it is state-independent (takes no
+        // meal-state input), so computing it first lets the OBSERVING→CONFIRMED dose-adequacy gate
+        // size the prospective commit-shot. Pure reorder, no behaviour change. (2026-07-02, mirrors
+        // AAPS 4bfd7bea32.)
+        let budget = AggressionBudgetEngine.aggressionBudget(
+            baseInsulinReq: inputs.baseInsulinReq, mlHypoRisk: inputs.mlHypoRisk,
+            inPostExerciseWindow: inputs.inPostExerciseWindow,
+            hypoCautionUserKnob: inputs.hypoCautionUserKnob, sensitivityUserKnob: inputs.sensitivityUserKnob
+        )
+
+        // Dose-adequacy gate for OBSERVING→CONFIRMED (2026-07-02): the single per-session commit-shot
+        // must beat one routine COMMITTED hold cycle (committedCapU) to be worth spending — else a
+        // trivial pre-meal upswing burns the token and the committedInSession lock starves the meal on
+        // holds alone. Uses the mlHypoRisk-DAMPED budget, so confirm is also held back when hypo risk
+        // is elevated. Clamped strictly below confirmedCapU so a manual committedCap ≥ confirmedCap
+        // can't make the gate unsatisfiable (which would silently disable V6 meal response). Fast-carb
+        // fast-path is exempt (handled inside step()).
+        let prospectiveConfirmShot = budget.budget *
+            MealActionMultiplier.value(for: .confirmed, aggressionUserKnob: inputs.aggressionUserKnob)
+        let confirmDoseFloor = min(
+            inputs.committedCapU,
+            MealHypothesisConstants.confirmDoseFloorMaxFracOfConfirmedCap * inputs.confirmedCapU
+        )
+        let confirmDoseAdequate = prospectiveConfirmShot > confirmDoseFloor
+
         let newHypothesisState = MealHypothesisEngine.step(
             current: resetState, score: scoreResult.score, eventualBg: inputs.eventualBg,
             targetBg: inputs.targetBg, delta: inputs.delta, deltaAccl: inputs.deltaAccl,
             deltaDeclining: MealHypothesisEngine.deltaDeclining(inputs.deltaHistory, windowCycles: 2),
             asleep: inputs.asleep, exerciseActive: inputs.exerciseActive,
-            fastConfirmEnabled: inputs.fastCarbConfirmEnabled
-        )
-
-        let budget = AggressionBudgetEngine.aggressionBudget(
-            baseInsulinReq: inputs.baseInsulinReq, mlHypoRisk: inputs.mlHypoRisk,
-            inPostExerciseWindow: inputs.inPostExerciseWindow,
-            hypoCautionUserKnob: inputs.hypoCautionUserKnob, sensitivityUserKnob: inputs.sensitivityUserKnob
+            fastConfirmEnabled: inputs.fastCarbConfirmEnabled,
+            confirmDoseAdequate: confirmDoseAdequate
         )
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
