@@ -152,9 +152,8 @@ enum BoostV5Adapter {
         // AAPS rounds both ML outputs to 3 dp before the engine consumes them.
         let mlHypoRisk = rawHypoRisk.map { ($0 * 1000).rounded() / 1000 }
         let mlMealLikely = BoostMLModels.mealLikely(mlFeatures).map { ($0 * 1000).rounded() / 1000 }
-        // NOTE: Phase-3 postActionRiskCheck (riskAtProjectedIob) is intentionally left nil — AAPS V5
-        // disables it in V0 (OpenAPSBoostV5Plugin: `riskAtProjectedIob = null`). Wiring it would
-        // diverge from the reference; kept inert for exact parity. mlHypoRisk still damps the budget.
+        // Phase-3 postActionRiskCheck is now WIRED (2026-07-02, AAPS 921a56ea27) — see the
+        // riskAtProjectedIob closure passed into V5Inputs below.
 
         // ── HealthKit activity (steps + HR) → V5 exercise modifiers. Snapshot is kept fresh
         // by BoostActivityMonitor; flags() guards on staleness. Inert until Health read is granted. ──
@@ -194,6 +193,15 @@ enum BoostV5Adapter {
                 enableSmbPreChecks: mode == .active ? microBolusAllowed : true,
                 mlHypoRisk: mlHypoRisk, // bundled LightGBM; nil → score renormalize path
                 mlMealLikely: mlMealLikely, // bundled LightGBM; nil → score renormalize path
+                // Phase-3 postActionRiskCheck (2026-07-02, AAPS 921a56ea27): re-score the hypo model at
+                // the projected post-SMB IOB using this cycle's cached feature vector. In ACTIVE mode V5
+                // replaces the SMB AFTER V1's post-SMB damper ran, so without this the delivered dose had
+                // neither damper. Honest scope: with the shipped v12 model the IOB→risk response is
+                // flat-to-inverted, so this is expected to ~never fire (projected ≤ current → pass-through,
+                // identical to the old nil). nil/unavailable → current risk (gate passes through).
+                riskAtProjectedIob: { projIob in
+                    BoostMLModels.hypoRiskAtProjectedIob(projIob) ?? (mlHypoRisk ?? 0.0)
+                },
                 recentLowBg: recentLowBg(glucose, now: clock),
                 cumulativeRise30min: max(0.0, shortAvg * 6.0),
                 hour: hour,
@@ -286,10 +294,12 @@ enum BoostV5Adapter {
     }
 
     /// Minute-of-day membership of `[start, end)` on a 24-hour clock, wrapping midnight when
-    /// `end <= start`. Mirrors `NightMode.minuteInWindow`.
+    /// `end < start`. `start == end` is an EMPTY window (2026-07-02, AAPS 8ecaf7bbd9) — sleep
+    /// detection then governs the night. Mirrors `NightMode.minuteInWindow`.
     static func minuteInWrapped(_ now: Int, _ start: Int, _ end: Int) -> Bool {
+        if start == end { return false }
         if end > start { return now >= start && now < end }
-        return start == end ? true : (now >= start || now < end)
+        return now >= start || now < end
     }
 
     /// Local minute-of-day [0, 1440) for `clock`.

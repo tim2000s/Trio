@@ -166,10 +166,11 @@ final class NightModeTests: XCTestCase {
 
     // MARK: minuteInWindow edge cases
 
-    func testStartEqualsEndIsAlwaysInWindow() {
-        // AAPS takes the wrap branch for start==end → full 24h coverage (always in window).
-        XCTAssertTrue(NightMode.minuteInWindow(now: 100, start: 100, end: 100))
-        XCTAssertTrue(NightMode.minuteInWindow(now: 0, start: 100, end: 100))
-        XCTAssertTrue(NightMode.minuteInWindow(now: 720, start: 100, end: 100))
+    func testStartEqualsEndIsEmptyWindow() {
+        // 2026-07-02 (AAPS 8ecaf7bbd9): start==end is an EMPTY clock window (was always-active, which
+        // silently made V6 never dose). Sleep detection still governs the night via the caller.
+        XCTAssertFalse(NightMode.minuteInWindow(now: 100, start: 100, end: 100))
+        XCTAssertFalse(NightMode.minuteInWindow(now: 0, start: 100, end: 100))
+        XCTAssertFalse(NightMode.minuteInWindow(now: 720, start: 100, end: 100))
     }
 }
