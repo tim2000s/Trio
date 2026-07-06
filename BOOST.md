@@ -90,8 +90,8 @@ both platforms and verified in numeric parity). Because it reads only dosing his
 works from **standard oref** — you don't need to have come from a Boost install.
 
 **How it behaves (the guard‑rails):**
-- Runs **once**, in the background, on the first Active cycle. Gated by a one‑shot flag (`boostV5AutoConfigDone`).
-- **Suggestion‑only.** Aggression / Hypo‑Caution / fast‑carb only ever move in the *protective* direction, so they seed from the factory default. The two **dosing caps** are gated on an explicit **per‑knob “user‑touched” flag** — set only when you move that cap's slider (`onEditingChanged`, never programmatically) — so auto‑config can seed a cap (and raise it for a genuine new user) but **never overrides a cap you set yourself**, even one you set to the default value. This is the iOS equivalent of Android's `getIfExists == null`.
+- Runs in the background on Active cycles, with **per‑knob resolution** (`boostV5AutoConfigResolved`, mirrors AAPS b2c0705e5e): each knob is attempted until it has either been **applied once** or been **skipped because you tuned it** — both mark it resolved and it is never revisited. Knobs added to auto‑config in a later update still get derived on existing installs. The legacy global one‑shot flag (`boostV5AutoConfigDone`) migrates on first run: knobs you moved off factory default stay untouched forever; knobs still at stock become derivable again.
+- **Suggestion‑only.** Aggression / Hypo‑Caution / fast‑carb only ever move in the *protective* direction, and seed only while still **at the factory default** (a value merely *persisted at* the default — e.g. a settings import — never blocks a suggestion). The two **dosing caps** and the cumulative cap are additionally gated on an explicit **per‑knob “user‑touched” flag** — set only when you move that cap's slider (`onEditingChanged`, never programmatically) — so auto‑config can seed a cap (and raise it for a genuine new user) but **never overrides a cap you set yourself**, even one you set to the default value.
 - Needs **≥ 7 days of data and ≥ 1500 CGM readings**, or it does nothing and **retries on a later cycle**.
 - **Never raises aggression** above neutral on day one; safety knobs only ever *tighten*.
 - **Wrapped so any failure is logged and swallowed** — it can never block or alter the dose path.
@@ -108,7 +108,7 @@ sizes** (split from pump history), your **time‑below‑range** (% < 70 and % <
 | **Aggression** (0.7–1.3) | `0.85` if hypo‑prone (TBR<54% > 1.5 **or** TBR<70% > 6%); `0.92` if TBR<70% > 4%; else **1.0**. Never above 1.0. |
 | **Confirmed cap** (0–7.5 U) | `clamp(max(p90 meal boluses, p95 SMBs), 1.5, 7.5)` |
 | **Committed cap** (0–2.5 U) | `clamp(max(p75 SMBs, TDD/40), 0.25, 2.5)` |
-| **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, max(5.0, Confirmed))` — derived by the shared calculator; Trio has no engine knob to receive it yet, so it isn't written (the per‑shot caps still bound every dose). |
+| **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, max(5.0, Confirmed))` — derived by the shared calculator and written to `boostCumulativeSmbCap60Min`; the active override enforces it as the rolling‑60‑min anti‑stacking cap. |
 | **Max IOB / Bolus cap** | carried from your existing limits (clamped). |
 | **Fast‑carb confirm** | **off** if hypo‑prone, otherwise on. |
 
