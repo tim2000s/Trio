@@ -24,6 +24,13 @@ public enum SafetyGateConstants {
     public static let velocityRiseLoMgdl = 25.0
     public static let velocityRiseHiMgdl = 50.0
     public static let velocityScaleFloor = 0.40
+    /// 2026-07-04 post-rescue window threshold (mg/dL): the rolling 45-min CGM low below which
+    /// the V6 override's meal-state exemption is suppressed. Trio's acting engine is trio-oref
+    /// (there is no V1-side post-rescue tier guard here to share a constant with), so this is
+    /// the named shared constant — the SAME value as AAPS
+    /// `DetermineBasalBoost.POST_RESCUE_LOW_THRESHOLD_MGDL` (75.0), where the alignment with
+    /// V1's Fix A v2 tier guard is load-bearing. Keep in lock-step with AAPS.
+    public static let postRescueLowThresholdMgdl = 75.0
 }
 
 public struct Phase3Inputs {
@@ -224,5 +231,57 @@ public enum SafetyGates {
         case .committed: return min(dose, committedCapU)
         default: return dose
         }
+    }
+
+    // MARK: - V6 override caps (the active-override seam)
+
+    /// Which V6-override cap bound the dose this cycle (`none` when uncapped).
+    public enum V6OverrideCap: String, Equatable, Sendable {
+        case none
+        case nonMeal
+        case postRescue
+    }
+
+    /// Outcome of the V6-override dose caps: the dose to deliver plus which cap bound.
+    public struct V6OverrideCapsResult: Equatable, Sendable {
+        public let dose: Double
+        public let cap: V6OverrideCap
+    }
+
+    /// V6-override dose caps (pure — unit-tested directly). Mirrors AAPS
+    /// `OpenAPSBoostPlugin.applyV6OverrideCaps` (5b5026e10b + c306241a35):
+    ///  - non-meal-state cap (2026-07-02): in IDLE/OBSERVING/RECOVERING V6 never out-doses the
+    ///    base oref determination;
+    ///  - post-rescue meal-state cap (2026-07-04): inside the post-rescue window
+    ///    (recentLowBG45Min < `SafetyGateConstants.postRescueLowThresholdMgdl`) the meal-state
+    ///    exemption is suppressed, so CONFIRMED/COMMITTED are ALSO capped at the base engine's
+    ///    would-dose.
+    ///
+    /// Incident 2026-07-03 19:47 BST (AAPS): severe hypo (nadir 40) → unannounced rescue carbs →
+    /// violent rebound. V6 CONFIRMED at BG 119 delivered 2.7U while V1's 45-min post-rescue tier
+    /// guard had restrained the base engine to 1.05U — the meal-state exemption discarded that
+    /// restraint. BG then ran 181 → nadir 81 with zero margin, and the 2.7U tripped the 2.5U
+    /// cumulative cap, silencing V6 for the following hour.
+    ///
+    /// DB backtest (2026-07-04): 20.4% of meal-state cycles are post-rescue; 27% of the insulin
+    /// this cap removes sits directly ahead of a second low < 70 (vs 14-19% for every other lever
+    /// evaluated). Cost side: 10% genuine post-hypo meals, median 0.15U under-delivery, zero
+    /// double-dips. Verdict SHIP.
+    ///
+    /// WHY inherit the base dose (alignment is load-bearing in AAPS): the 75 mg/dL / 45-min
+    /// window is the SAME constant + source value as V1's post-rescue tier guard, so whenever the
+    /// cap binds, the base would-dose is by construction the hypo-restrained dose — the cap
+    /// inherits that restraint instead of inventing a second, divergent notion of "post-rescue".
+    /// In Trio the base engine is trio-oref, whose own low-side guards (minGuard/threshold, LGS)
+    /// shape `orefWouldDose` in the same window.
+    public static func applyV6OverrideCaps(
+        inMealState: Bool,
+        inPostRescueWindow: Bool,
+        v5FinalDose: Double,
+        orefWouldDose: Double
+    ) -> V6OverrideCapsResult {
+        let dose = (inMealState && !inPostRescueWindow) ? v5FinalDose : min(v5FinalDose, orefWouldDose)
+        let cap: V6OverrideCap = dose >= v5FinalDose ? .none : (inMealState ? .postRescue : .nonMeal)
+        return V6OverrideCapsResult(dose: dose, cap: cap)
     }
 }

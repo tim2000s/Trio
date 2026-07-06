@@ -212,9 +212,33 @@ struct OpenAPSSwift {
                         let v1WouldDose = det.units ?? 0
                         let inMealState = result.decision.mealHypothesis == .confirmed
                             || result.decision.mealHypothesis == .committed
-                        let preNonMealCapDose = boostDose
-                        if !inMealState { boostDose = min(boostDose, v1WouldDose) }
-                        let nonMealCapped = boostDose < preNonMealCapDose
+
+                        // Post-rescue meal-state cap (2026-07-04, faithful port of AAPS
+                        // c306241a35 / OpenAPSBoostPlugin.applyV6OverrideCaps): inside the
+                        // post-rescue window (rolling 45-min CGM low < 75 mg/dL — the shared
+                        // SafetyGateConstants.postRescueLowThresholdMgdl, same value as AAPS's
+                        // V1 tier-guard constant) the meal-state exemption above is SUPPRESSED,
+                        // so CONFIRMED/COMMITTED are also capped at the base engine's would-dose.
+                        // Incident 2026-07-03 (AAPS): nadir-40 hypo → unannounced rescue carbs →
+                        // rebound; V6 CONFIRMED at BG 119 delivered 2.7U while the hypo-restrained
+                        // base engine would give 1.05U. DB backtest 2026-07-04: 27% of the insulin
+                        // this cap removes sits directly ahead of a second low <70 (vs 14-19% for
+                        // every other lever); cost 10% genuine post-hypo meals at 0.15U median
+                        // under-delivery. See SafetyGates.applyV6OverrideCaps (unit-tested).
+                        let recentLow45 = BoostV5Adapter.recentLowBg45Min(glucose, now: clock)
+                        let inPostRescueWindow = recentLow45 < SafetyGateConstants.postRescueLowThresholdMgdl
+                        let preCapDose = boostDose
+                        let caps = SafetyGates.applyV6OverrideCaps(
+                            inMealState: inMealState,
+                            inPostRescueWindow: inPostRescueWindow,
+                            v5FinalDose: (preCapDose as NSDecimalNumber).doubleValue,
+                            orefWouldDose: (v1WouldDose as NSDecimalNumber).doubleValue
+                        )
+                        // Apply the binding cap in Decimal (min can only reduce) so no Double
+                        // round-trip touches the delivered value.
+                        if caps.cap != .none { boostDose = min(boostDose, v1WouldDose) }
+                        let nonMealCapped = caps.cap == .nonMeal
+                        let postRescueCapped = caps.cap == .postRescue
 
                         // Honour the user's explicit "no SMB" levers even in active mode: master
                         // SMB-off, the scheduled SMB-off window, and a high temp target with "Allow
@@ -265,10 +289,15 @@ struct OpenAPSSwift {
                                 " V6 suppressed (cumulative SMB cap \(String(format: "%.2f", recentSmb60))U/\(String(format: "%.2f", cumulativeCap))U reached);"
                         } else if let age = lastBolusAgeMin, age > smbInterval {
                             det.units = boostDose
-                            if nonMealCapped {
+                            if postRescueCapped {
+                                det.reason += " V6 post-rescue-capped to V1 base " +
+                                    "\(String(format: "%.3f", (v1WouldDose as NSDecimalNumber).doubleValue))U (from " +
+                                    "\(String(format: "%.3f", (preCapDose as NSDecimalNumber).doubleValue))U, " +
+                                    "45-min low \(String(format: "%.0f", recentLow45)));"
+                            } else if nonMealCapped {
                                 det.reason += " V6 non-meal-capped to V1 base " +
                                     "\(String(format: "%.3f", (v1WouldDose as NSDecimalNumber).doubleValue))U (from " +
-                                    "\(String(format: "%.3f", (preNonMealCapDose as NSDecimalNumber).doubleValue))U, " +
+                                    "\(String(format: "%.3f", (preCapDose as NSDecimalNumber).doubleValue))U, " +
                                     "state=\(result.decision.mealHypothesis.rawValue));"
                             }
                         } else {
