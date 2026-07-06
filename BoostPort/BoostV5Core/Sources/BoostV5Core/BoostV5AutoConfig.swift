@@ -22,6 +22,18 @@ public enum BoostV5AutoConfig {
     public static let sev54HypoProne = 1.5
     public static let tbr70HypoProne = 6.0
 
+    /// Minimum manual (NORMAL) boluses in the window before their p90 may drive the Confirmed cap.
+    /// Backtest evidence (7-user migration cohort, 2026-07-06, AAPS fe9d8a1a13): one user's derived
+    /// confirmedCap of 6.8 U rested on a p90 of just FOUR manual boluses — one of them an 8 U
+    /// outlier. A percentile of n=4 is noise, not a dose habit. Below this floor the Confirmed cap
+    /// falls back to the SMB p95 alone (still clamped to [1.5, 7.5]).
+    public static let minManualBolusSamples = 10
+
+    /// Upper clamp of the derived rolling-60-min cumulative SMB cap — the preference range max of
+    /// `boostCumulativeSmbCap60Min` (0…10). The cap formula is "one confirm shot + two holds"; the
+    /// clamp only stops it exceeding what the preference can express. (AAPS fe9d8a1a13.)
+    public static let cumulativeCapMaxU = 10.0
+
     /// What the host gathers from the user's last-N-day history (any prior engine).
     public struct PriorDosing: Sendable {
         public let daysWithData: Int
@@ -93,20 +105,18 @@ public enum BoostV5AutoConfig {
                 "Aggression \(aggression) (\(aggression < 1.0 ? "gentle — hypo history" : "neutral"); refines after shadow period)"
             )
 
-        // Confirmed cap [1.5..7.5]
-        let confirmedCapU = round2(min(max(max(percentile(p.manualBolusesU, 90), percentile(p.smbAmountsU, 95)), 1.5), 7.5))
+        // Confirmed cap [1.5..7.5]: cover their biggest typical single dose (meal bolus p90 or SMB
+        // p95). The manual-bolus p90 participates only with a statistically honest sample
+        // (>= minManualBolusSamples in the window) — see the constant's doc for the n=4 case.
+        let manualP90 = p.manualBolusesU.count >= minManualBolusSamples ? percentile(p.manualBolusesU, 90) : 0.0
+        let confirmedCapU = round2(min(max(max(manualP90, percentile(p.smbAmountsU, 95)), 1.5), 7.5))
         reasons.append("Confirmed cap \(confirmedCapU)U (≈ your biggest typical single dose)")
 
-        // Committed cap [0.25..2.5]
+        // Committed cap [0.25..2.5]: routine per-cycle hold = max(typical SMB p75, TDD/40), floored.
         let committedCapU = round2(min(max(max(percentile(p.smbAmountsU, 75), p.tddMedianU / 40.0), 0.25), 2.5))
-        reasons.append("Committed cap \(committedCapU)U (≈ your routine SMB size)")
+        reasons.append("Committed cap \(committedCapU)U (max of your routine SMB size and TDD/40)")
 
-        // Rolling-60-min cumulative SMB cap: bounds dose *frequency* (per-shot caps only bound
-        // magnitude). ~one confirm shot plus a couple of holds per hour. Upper bound is at least
-        // confirmedCapU so the hourly budget can never sit BELOW a single confirmed shot for a
-        // big-meal user. (Review 2026-06-26, LOW correctness.) (No Trio engine knob yet — shared
-        // output; the host writes it where the setting exists.)
-        let cumulativeSmbCap60MinU = round1(min(max(confirmedCapU + 2.0 * committedCapU, 1.0), max(5.0, confirmedCapU)))
+        let cumulativeSmbCap60MinU = cumulativeCap60Min(confirmedCapU: confirmedCapU, committedCapU: committedCapU)
         reasons.append("Cumulative SMB cap/60min \(cumulativeSmbCap60MinU)U (limits dose frequency)")
 
         let maxIobU = round1(min(max(p.currentMaxIobU, 0.1), 12.0))
@@ -123,6 +133,25 @@ public enum BoostV5AutoConfig {
             maxIobU: maxIobU, bolusCapU: bolusCapU,
             fastCarbConfirm: fastCarbConfirm, rationale: reasons
         )
+    }
+
+    /// Rolling-60-min cumulative SMB cap: bounds dose *frequency* (the per-shot caps only bound
+    /// magnitude). Budget = one confirm shot plus two holds per hour, clamped only to the
+    /// preference's expressible range [1.0, `cumulativeCapMaxU`].
+    ///
+    /// History (AAPS fe9d8a1a13): the previous ceiling was `max(5.0, confirmedCap)`, which
+    /// collapsed "one confirm + 2 holds" to "confirm + ~0 holds" for any big-confirm user (the
+    /// 2026-07-06 7-user migration backtest attributed 6 of one user's 8 projected suppressions to
+    /// exactly this, and left another user's cumulative == confirmedCap so a single confirm
+    /// exhausted the hour). The clamp is now the pref range max: the formula is the policy, the
+    /// clamp is only a bound.
+    ///
+    /// Exposed separately from `compute` because the apply layer must recompute it from the FINAL
+    /// operative per-shot caps (kept-user-tuned or derived), not from the derivation's own caps —
+    /// a cumulative budget sized from a derived confirmedCap that never applies is incoherent
+    /// (cohort user E: cumulative sized from derived 4.65 while his operative cap was 2.0).
+    public static func cumulativeCap60Min(confirmedCapU: Double, committedCapU: Double) -> Double {
+        round1(min(max(confirmedCapU + 2.0 * committedCapU, 1.0), cumulativeCapMaxU))
     }
 
     /// Linear-interpolated percentile (0..100) of positive values; 0.0 if empty.

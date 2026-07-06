@@ -90,6 +90,11 @@ struct Preferences: JSON, Equatable {
     // in an update, or first run with insufficient history). Raw values of BoostAutoConfigKnob.
     // Not user-facing.
     var boostV5AutoConfigResolved: [String] = []
+    // Auto-config persistence schema version (see BoostV5AutoConfigApply.autoConfigSchemaVersion,
+    // mirrors AAPS 131923247e): bumped when the resolution semantics change so already-persisted
+    // per-knob resolved marks can be re-audited (versioned re-migration). 0 = pre-versioning.
+    // Not user-facing.
+    var boostV5AutoConfigSchemaVersion: Int = 0
     // Night mode (suppresses SMB overnight). Defaults match AAPS.
     var boostNightModeEnabled: Bool = false
     var boostNightModeStartHour: Decimal = 22
@@ -198,6 +203,7 @@ extension Preferences {
         case boostCumulativeSmbCap60MinUserSet
         case boostV5AutoConfigDone
         case boostV5AutoConfigResolved
+        case boostV5AutoConfigSchemaVersion
         case boostNightModeEnabled
         case boostNightModeStartHour
         case boostNightModeEndHour
@@ -523,6 +529,9 @@ extension Preferences: Decodable {
         }
         if let v = try? container.decode([String].self, forKey: .boostV5AutoConfigResolved) {
             preferences.boostV5AutoConfigResolved = v
+        }
+        if let v = try? container.decode(Int.self, forKey: .boostV5AutoConfigSchemaVersion) {
+            preferences.boostV5AutoConfigSchemaVersion = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostNightModeEnabled) {
