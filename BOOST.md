@@ -91,7 +91,7 @@ works from **standard oref** — you don't need to have come from a Boost instal
 
 **How it behaves (the guard‑rails):**
 - Runs in the background on Active cycles, with **per‑knob resolution** (`boostV5AutoConfigResolved`, mirrors AAPS b2c0705e5e): each knob is attempted until it has either been **applied once** or been **skipped because you tuned it** — both mark it resolved and it is never revisited. Knobs added to auto‑config in a later update still get derived on existing installs. The legacy global one‑shot flag (`boostV5AutoConfigDone`) migrates on first run: knobs you moved off factory default stay untouched forever; knobs still at stock become derivable again.
-- **Suggestion‑only.** Aggression / Hypo‑Caution / fast‑carb only ever move in the *protective* direction, and seed only while still **at the factory default** (a value merely *persisted at* the default — e.g. a settings import — never blocks a suggestion). The two **dosing caps** and the cumulative cap are additionally gated on an explicit **per‑knob “user‑touched” flag** — set only when you move that cap's slider (`onEditingChanged`, never programmatically) — so auto‑config can seed a cap (and raise it for a genuine new user) but **never overrides a cap you set yourself**, even one you set to the default value.
+- **Suggestion‑only.** Aggression / Hypo‑Caution / fast‑carb only ever move in the *protective* direction, and seed only while still **at a factory default** — *any* factory default that setting ever shipped with (the cap defaults changed on 2026‑06‑26, so a value carried over from an older build still counts as untouched; a value merely *persisted at* a default — e.g. a settings import — never blocks a suggestion). The two **dosing caps** and the cumulative cap are additionally gated on an explicit **per‑knob “user‑touched” flag** — set only when you move that cap's slider (`onEditingChanged`, never programmatically) — so auto‑config can seed a cap (and raise it for a genuine new user) but **never overrides a cap you set yourself**, even one you set to the default value.
 - Needs **≥ 7 days of data and ≥ 1500 CGM readings**, or it does nothing and **retries on a later cycle**.
 - **Never raises aggression** above neutral on day one; safety knobs only ever *tighten*.
 - **Wrapped so any failure is logged and swallowed** — it can never block or alter the dose path.
@@ -106,11 +106,16 @@ sizes** (split from pump history), your **time‑below‑range** (% < 70 and % <
 |---|---|
 | **HypoCaution** (1.0–2.0) | `clamp(1.0 + max(0, TBR<70% − 4)/4 + max(0, TBR<54% − 1)×0.5, 1.0, 2.0)` |
 | **Aggression** (0.7–1.3) | `0.85` if hypo‑prone (TBR<54% > 1.5 **or** TBR<70% > 6%); `0.92` if TBR<70% > 4%; else **1.0**. Never above 1.0. |
-| **Confirmed cap** (0–7.5 U) | `clamp(max(p90 meal boluses, p95 SMBs), 1.5, 7.5)` |
-| **Committed cap** (0–2.5 U) | `clamp(max(p75 SMBs, TDD/40), 0.25, 2.5)` |
-| **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, max(5.0, Confirmed))` — derived by the shared calculator and written to `boostCumulativeSmbCap60Min`; the active override enforces it as the rolling‑60‑min anti‑stacking cap. |
+| **Confirmed cap** (0–7.5 U) | `clamp(max(p90 meal boluses, p95 SMBs), 1.5, 7.5)` — the meal‑bolus p90 only participates with **≥ 10 manual boluses** in the window (a percentile of a handful of boluses is noise, not a habit); below that the cap comes from the SMB p95 alone. |
+| **Committed cap** (0–2.5 U) | `clamp(max(p75 SMBs, TDD/40), 0.25, 2.5)` — whichever of the two terms is larger. |
+| **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, 10.0)` — one confirm shot plus two holds per hour, clamped only to the preference range. Computed from the **final operative** per‑shot caps (kept‑or‑derived), so a kept user value sizes the hourly budget, not a derivation that never applied. Written to `boostCumulativeSmbCap60Min`; the active override enforces it as the rolling‑60‑min anti‑stacking cap. |
 | **Max IOB / Bolus cap** | carried from your existing limits (clamped). |
 | **Fast‑carb confirm** | **off** if hypo‑prone, otherwise on. |
+
+**TBR raise‑guard:** a dose‑cap **raise** (Confirmed / Committed / Cumulative going *up* from the
+current value) is **not auto‑applied when 14‑day time‑below‑70 exceeds 4%** — it is surfaced as a
+suggestion in the notification instead (set it manually if desired). Lowerings and all non‑cap
+tightenings always apply.
 
 A well‑controlled user lands on a fully neutral config (Aggression 1.0, HypoCaution 1.0, fast‑carb on);
 a low‑prone user gets gentler aggression, more hypo damping, tighter caps, and fast‑carb off — all in the
