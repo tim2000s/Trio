@@ -80,9 +80,16 @@ struct Preferences: JSON, Equatable {
     var boostV5ConfirmedCapUUserSet: Bool = false
     var boostV5CommittedCapUUserSet: Bool = false
     var boostCumulativeSmbCap60MinUserSet: Bool = false
-    // Internal one-shot flag: set true once the V5 knobs have been auto-configured from the user's
-    // prior (oref) dosing history on first switch to boostMode == .active. Not user-facing.
+    // LEGACY internal one-shot flag (pre per-knob resolution): set true once the V5 knobs had been
+    // auto-configured. Superseded 2026-07-06 (AAPS b2c0705e5e) by per-knob resolution below; kept
+    // only so existing installs migrate (a set flag marks off-default knobs resolved, then clears).
     var boostV5AutoConfigDone: Bool = false
+    // Per-knob auto-config resolution marks (AAPS BooleanComposedKey.BoostV5AutoConfigResolved
+    // equivalent): a knob is RESOLVED once auto-config has either applied it or skipped it because
+    // the user tuned it; unresolved knobs retry on later cycles (e.g. knobs added to auto-config
+    // in an update, or first run with insufficient history). Raw values of BoostAutoConfigKnob.
+    // Not user-facing.
+    var boostV5AutoConfigResolved: [String] = []
     // Night mode (suppresses SMB overnight). Defaults match AAPS.
     var boostNightModeEnabled: Bool = false
     var boostNightModeStartHour: Decimal = 22
@@ -190,6 +197,7 @@ extension Preferences {
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
         case boostV5AutoConfigDone
+        case boostV5AutoConfigResolved
         case boostNightModeEnabled
         case boostNightModeStartHour
         case boostNightModeEndHour
@@ -512,6 +520,9 @@ extension Preferences: Decodable {
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v
+        }
+        if let v = try? container.decode([String].self, forKey: .boostV5AutoConfigResolved) {
+            preferences.boostV5AutoConfigResolved = v
         }
 
         if let v = try? container.decode(Bool.self, forKey: .boostNightModeEnabled) {
