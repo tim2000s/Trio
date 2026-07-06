@@ -27,7 +27,26 @@ public final class BoostV5Store: @unchecked Sendable {
     // Use mutateState(_:) for the load→decide→save cycle — it holds the lock across the whole span,
     // which is what guards against an overlap between the scheduled loop and a manual determine call.
     private let lock = NSLock()
+    /// Most recent persisted state, held in memory (guarded by `lock`). Mirrors the AAPS
+    /// V5StateStore in-memory cache: reads prefer the cache (always-current within process),
+    /// falling back to UserDefaults only on cold start. This is also what carries the
+    /// deliberately-non-serialized `lastCycleScore` across cycles (2026-07-03 sustained-score
+    /// early confirm, AAPS 242a6e179d): a process restart drops it — fails safe to legacy
+    /// confirm timing — while a normal 5-min cycle sees it.
+    private var cached: V5PersistedState?
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    /// Decode from UserDefaults (cold-start path). Callers must hold `lock`.
+    /// A corrupt blob is CLEARED so it doesn't silently re-parse-and-fail on every cold start
+    /// (AAPS d91a6a2617 quality pass — falls back to IDLE, safer than carrying unknown state).
+    private func decodeFromDefaults() -> V5PersistedState {
+        guard let data = defaults.data(forKey: stateKey) else { return V5PersistedState() }
+        guard let state = try? JSONDecoder().decode(V5PersistedState.self, from: data) else {
+            defaults.removeObject(forKey: stateKey)
+            return V5PersistedState()
+        }
+        return state
+    }
 
     public var mode: BoostMode {
         get {
@@ -45,15 +64,16 @@ public final class BoostV5Store: @unchecked Sendable {
     public func loadState() -> V5PersistedState {
         lock.lock()
         defer { lock.unlock() }
-        guard let data = defaults.data(forKey: stateKey),
-              let state = try? JSONDecoder().decode(V5PersistedState.self, from: data)
-        else { return V5PersistedState() }
+        if let cached { return cached }
+        let state = decodeFromDefaults()
+        cached = state
         return state
     }
 
     public func saveState(_ state: V5PersistedState) {
         lock.lock()
         defer { lock.unlock() }
+        cached = state // synchronous, before the defaults write — same-process reads always current
         if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: stateKey) }
     }
 
@@ -64,15 +84,11 @@ public final class BoostV5Store: @unchecked Sendable {
     public func mutateState<T>(_ body: (inout V5PersistedState) -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        var state: V5PersistedState
-        if let data = defaults.data(forKey: stateKey),
-           let decoded = try? JSONDecoder().decode(V5PersistedState.self, from: data)
-        {
-            state = decoded
-        } else {
-            state = V5PersistedState()
-        }
+        // Cache-first (AAPS V5StateStore idiom): within-process reads see the last save —
+        // including the non-Codable lastCycleScore — falling back to UserDefaults on cold start.
+        var state = cached ?? decodeFromDefaults()
         let result = body(&state)
+        cached = state
         if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: stateKey) }
         return result
     }

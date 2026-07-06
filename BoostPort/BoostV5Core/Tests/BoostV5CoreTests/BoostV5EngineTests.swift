@@ -114,4 +114,93 @@ final class BoostV5EngineTests: XCTestCase {
         let dFast = BoostV5Engine.decide(fast, persisted: V5PersistedState(mealHypothesis: confirmed))
         XCTAssertLessThan(dSlow.insulinToDeliver, dFast.insulinToDeliver)
     }
+
+    // MARK: 2026-07-03 sustained-score early confirm through decide() (AAPS 242a6e179d)
+
+    // OBSERVING one cycle before the standard age gate with the score/offset peaks already met.
+    private func observingOneCycleEarly() -> MealHypothesisState {
+        MealHypothesisState(
+            state: .observing,
+            ageCycles: MealHypothesisConstants.confirmMinObservingAge - 1,
+            maxScoreInObserving: 0.60,
+            maxEventualBgOffsetInObserving: 40.0,
+            committedInSession: false
+        )
+    }
+
+    // Inputs producing a confirm-ready score (≥ 0.55): delta 8, accl 20, ml 0.7, rise 48, hour 13.
+    private func scoreReadyInputs() -> V5Inputs {
+        baseInputs(
+            state: observingOneCycleEarly(), delta: 8, deltaAccl: 20, eventualBg: 160,
+            cumulativeRise30min: 48, mlMealLikely: 0.7
+        )
+    }
+
+    func testDecideThreadsLastCycleScoreIntoEarlyConfirm() {
+        let inputs = scoreReadyInputs()
+        // Sanity: this cycle's score is confirm-ready.
+        let probe = BoostV5Engine.decide(inputs, persisted: V5PersistedState(mealHypothesis: observingOneCycleEarly()))
+        XCTAssertGreaterThanOrEqual(probe.score, MealHypothesisConstants.confirmScore)
+
+        // WITHOUT a ready previous score (cold start / low last cycle): legacy timing → holds.
+        let cold = BoostV5Engine.decide(
+            inputs,
+            persisted: V5PersistedState(mealHypothesis: observingOneCycleEarly(), lastCycleScore: nil)
+        )
+        XCTAssertEqual(cold.mealHypothesis, .observing)
+        let lowPrev = BoostV5Engine.decide(
+            inputs,
+            persisted: V5PersistedState(mealHypothesis: observingOneCycleEarly(), lastCycleScore: 0.40)
+        )
+        XCTAssertEqual(lowPrev.mealHypothesis, .observing)
+
+        // WITH a ready previous score: the age gate opens one cycle early → CONFIRMED.
+        let early = BoostV5Engine.decide(
+            inputs,
+            persisted: V5PersistedState(mealHypothesis: observingOneCycleEarly(), lastCycleScore: 0.60)
+        )
+        XCTAssertEqual(early.mealHypothesis, .confirmed)
+    }
+
+    func testDecidePersistsThisCyclesScoreForNextCycle() {
+        let d = BoostV5Engine.decide(scoreReadyInputs(), persisted: V5PersistedState())
+        XCTAssertEqual(d.newPersistedState.lastCycleScore, d.score)
+    }
+
+    func testLastCycleScoreIsNotSerialized() throws {
+        // Mirrors the AAPS idiom (in-memory cache only): a JSON round-trip must DROP
+        // lastCycleScore so a process restart fails safe to legacy confirm timing.
+        let state = V5PersistedState(
+            mealHypothesis: observingOneCycleEarly(),
+            mlMealLikelyNullStreak: 2,
+            lastRunMs: 123_456.0,
+            lastCycleScore: 0.61
+        )
+        let data = try JSONEncoder().encode(state)
+        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("lastCycleScore"))
+        let decoded = try JSONDecoder().decode(V5PersistedState.self, from: data)
+        XCTAssertNil(decoded.lastCycleScore)
+        // The serialized fields still round-trip.
+        XCTAssertEqual(decoded.mealHypothesis, state.mealHypothesis)
+        XCTAssertEqual(decoded.mlMealLikelyNullStreak, 2)
+        XCTAssertEqual(decoded.lastRunMs, 123_456.0)
+    }
+
+    func testStoreCacheCarriesLastCycleScoreAcrossCycles() {
+        // BoostV5Store's in-memory cache (AAPS V5StateStore idiom) must carry the
+        // non-serialized lastCycleScore between mutateState cycles within a process,
+        // while a FRESH store instance (≈ app restart) loses it.
+        let suite = "boost-v5-store-cache-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = BoostV5Store(defaults: defaults)
+        store.mutateState { state in state.lastCycleScore = 0.58 }
+        let sameProcess = store.mutateState { state in state.lastCycleScore }
+        XCTAssertEqual(sameProcess, 0.58)
+
+        let restarted = BoostV5Store(defaults: defaults)
+        let afterRestart = restarted.mutateState { state in state.lastCycleScore }
+        XCTAssertNil(afterRestart)
+    }
 }
