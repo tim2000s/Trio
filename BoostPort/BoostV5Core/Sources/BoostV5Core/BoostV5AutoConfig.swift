@@ -17,6 +17,10 @@ public enum BoostV5AutoConfig {
     public static let minBgReadings = 1500 // ~7 days of 5-min CGM minus gaps
     private static let tbr70Target = 4.0 // % time <70 mg/dL
     private static let sev54Target = 1.0 // % time <54 mg/dL
+    /// Hypo-prone history cut-points (drive both the Aggression ease-down and fastCarbConfirm).
+    /// Named + shared per the AAPS d91a6a2617 quality pass (SEV54_HYPO_PRONE / TBR70_HYPO_PRONE).
+    public static let sev54HypoProne = 1.5
+    public static let tbr70HypoProne = 6.0
 
     /// What the host gathers from the user's last-N-day history (any prior engine).
     public struct PriorDosing: Sendable {
@@ -68,7 +72,7 @@ public enum BoostV5AutoConfig {
         guard p.daysWithData >= minDays, p.bgReadingCount >= minBgReadings else { return nil }
 
         var reasons: [String] = []
-        let hypoProne = p.timeBelow54Pct > 1.5 || p.tbrBelow70Pct > 6.0
+        let hypoProne = p.timeBelow54Pct > sev54HypoProne || p.tbrBelow70Pct > tbr70HypoProne
 
         // HypoCaution [1.0..2.0]
         let cautionRaw = 1.0
@@ -80,7 +84,7 @@ public enum BoostV5AutoConfig {
 
         // Aggression [0.7..1.3] — never auto-raised above 1.0
         let aggression = round2(
-            (p.timeBelow54Pct > 1.5 || p.tbrBelow70Pct > 6.0) ? 0.85
+            hypoProne ? 0.85
                 : (p.tbrBelow70Pct > tbr70Target) ? 0.92
                 : 1.0
         )
