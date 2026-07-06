@@ -320,4 +320,44 @@ final class MealHypothesisTests: XCTestCase {
         )
         XCTAssertEqual(r.state, .confirmed)
     }
+
+    // MARK: fast-carb fast-path 2026-07-03 retune (AAPS d2f9a08108): Δ 8→6, accl 15→10, score 0.60→0.65
+
+    func testRetunedConstants() {
+        XCTAssertEqual(MealHypothesisConstants.fastConfirmDelta, 6.0)
+        XCTAssertEqual(MealHypothesisConstants.fastConfirmAccl, 10.0)
+        XCTAssertEqual(MealHypothesisConstants.fastConfirmScore, 0.65)
+    }
+
+    func testRetunedFastPathFiresAtNewBoundary() {
+        // Exactly Δ=6, accl=10, score=0.65 — below the OLD thresholds (8/15) but at the new ones.
+        let r = E.step(
+            current: idle(), score: 0.65, eventualBg: 150, targetBg: 100, delta: 6.0, deltaAccl: 10.0,
+            deltaDeclining: false, asleep: false, exerciseActive: false, fastConfirmEnabled: true
+        )
+        XCTAssertEqual(r.state, .confirmed)
+    }
+
+    func testRetunedFastPathScoreRaisePaysForPhysicsRelaxation() {
+        // Score 0.60 satisfied the OLD gate but not the new 0.65 — physics alone must not fire.
+        let r = E.step(
+            current: idle(), score: 0.60, eventualBg: 150, targetBg: 100, delta: 12.0, deltaAccl: 30.0,
+            deltaDeclining: false, asleep: false, exerciseActive: false, fastConfirmEnabled: true
+        )
+        XCTAssertNotEqual(r.state, .confirmed)
+    }
+
+    func testRetunedFastPathStillNeedsAllThreeSignals() {
+        // Just under each new threshold blocks the path (others comfortably above).
+        let underDelta = E.step(
+            current: idle(), score: 0.7, eventualBg: 150, targetBg: 100, delta: 5.9, deltaAccl: 30.0,
+            deltaDeclining: false, fastConfirmEnabled: true
+        )
+        XCTAssertNotEqual(underDelta.state, .confirmed)
+        let underAccl = E.step(
+            current: idle(), score: 0.7, eventualBg: 150, targetBg: 100, delta: 12.0, deltaAccl: 9.9,
+            deltaDeclining: false, fastConfirmEnabled: true
+        )
+        XCTAssertNotEqual(underAccl.state, .confirmed)
+    }
 }
