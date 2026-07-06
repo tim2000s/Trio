@@ -10,6 +10,15 @@ enum BoostV5Adapter {
         return Double(recent.min() ?? 120)
     }
 
+    /// Minimum sgv over the last 45 min (mg/dL) — the post-rescue-window source value
+    /// (2026-07-04, AAPS c306241a35). Defaults to 999 when no recent data, matching AAPS
+    /// `recentLowBG45Min` (no data ⇒ no recent low ⇒ no post-rescue window).
+    static func recentLowBg45Min(_ glucose: [BloodGlucose], now: Date) -> Double {
+        let cutoff = now.addingTimeInterval(-45 * 60)
+        let recent = glucose.filter { $0.dateString >= cutoff }.compactMap(\.sgv)
+        return Double(recent.min() ?? 999)
+    }
+
     /// Run the V5 engine for this cycle against the stock determination + glucose status.
     /// Returns the decision; the caller decides whether to act on it (mode-gated).
     /// ML `direction_num` feature, EXACTLY matching AAPS DetermineBasalBoost (bucketing of
