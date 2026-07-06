@@ -107,6 +107,7 @@ final class BaseAPSManager: APSManager, Injectable {
     @Injected() private var broadcaster: Broadcaster!
     @Injected() private var trioAlertManager: TrioAlertManager!
     @Injected() private var boostActivityMonitor: BoostActivityMonitor!
+    @Injected() private var router: Router!
     @Persisted(key: "lastLoopStartDate") private var lastLoopStartDate: Date = .distantPast
     @Persisted(key: "lastLoopDate") var lastLoopDate: Date = .distantPast {
         didSet {
@@ -1006,57 +1007,68 @@ final class BaseAPSManager: APSManager, Injectable {
         return output
     }
 
-    /// The knobs Boost V5 auto-config manages, each with a per-knob resolution mark
-    /// (`Preferences.boostV5AutoConfigResolved`). Mirrors AAPS b2c0705e5e. maxIOB / maxBolus are
-    /// deliberately NOT managed in Trio: the suggestion merely carries the user's existing values
-    /// over, so writing them back would be an identity write.
-    private enum BoostAutoConfigKnob: String, CaseIterable {
-        case aggression
-        case hypoCaution
-        case confirmedCapU
-        case committedCapU
-        case cumulativeSmbCap60Min
-        case fastCarbConfirm
+    // Boost auto-config knobs: the shared BoostAutoConfigKnob enum lives in BoostV5Core (with the
+    // per-knob resolution helpers). maxIOB / maxBolus are deliberately NOT managed in Trio: the
+    // suggestion merely carries the user's existing values over, so writing them back would be an
+    // identity write.
+
+    /// Current value of a double knob in `p` (the Preferences struct always has a value, so
+    /// "stored" == current). `fastCarbConfirm` is boolean and never reaches this.
+    private static func boostKnobValue(_ knob: BoostAutoConfigKnob, _ p: Preferences) -> Double {
+        func dbl(_ d: Decimal) -> Double { Double(truncating: d as NSNumber) }
+        switch knob {
+        case .aggression: return dbl(p.boostV5Aggression)
+        case .hypoCaution: return dbl(p.boostV5HypoCaution)
+        case .confirmedCapU: return dbl(p.boostV5ConfirmedCapU)
+        case .committedCapU: return dbl(p.boostV5CommittedCapU)
+        case .cumulativeSmbCap60Min: return dbl(p.boostCumulativeSmbCap60Min)
+        case .fastCarbConfirm: return 0 // boolean knob — handled separately by the caller
+        }
     }
 
     /// "User (or an imported preset) has tuned this knob": the caps use their explicit per-knob
-    /// `…UserSet` flags (set only when the user moves the slider) OR value-vs-factory-default;
-    /// the remaining knobs compare value-vs-factory-default (a value persisted AT the default —
-    /// settings import, settings-screen visit — does not block a suggestion). AAPS b2c0705e5e.
+    /// `…UserSet` flags (set only when the user moves the slider) OR the any-era
+    /// value-vs-factory test; the remaining knobs use the value test alone. The value test
+    /// recognises EVERY factory default the knob has ever shipped with (AAPS fe9d8a1a13 amendment
+    /// #1 — Trio's cap defaults changed in 5cf1abb84, so a Preferences JSON persisted before
+    /// 2026-06-26 carries 1.0/0.25 that must read as at-factory, not user-tuned).
     private static func boostKnobUserTuned(
         _ knob: BoostAutoConfigKnob,
         _ p: Preferences,
         stock: Preferences
     ) -> Bool {
-        func tuned(_ v: Decimal, _ def: Decimal) -> Bool {
-            BoostV5AutoConfigApply.isUserTuned(
-                storedValue: Double(truncating: v as NSNumber),
-                defaultValue: Double(truncating: def as NSNumber)
-            )
-        }
         switch knob {
-        case .aggression: return tuned(p.boostV5Aggression, stock.boostV5Aggression)
-        case .hypoCaution: return tuned(p.boostV5HypoCaution, stock.boostV5HypoCaution)
-        case .confirmedCapU: return p.boostV5ConfirmedCapUUserSet ||
-            tuned(p.boostV5ConfirmedCapU, stock.boostV5ConfirmedCapU)
-        case .committedCapU: return p.boostV5CommittedCapUUserSet ||
-            tuned(p.boostV5CommittedCapU, stock.boostV5CommittedCapU)
-        case .cumulativeSmbCap60Min: return p.boostCumulativeSmbCap60MinUserSet ||
-            tuned(p.boostCumulativeSmbCap60Min, stock.boostCumulativeSmbCap60Min)
-        case .fastCarbConfirm: return p.boostV5FastCarbConfirm != stock.boostV5FastCarbConfirm
+        case .fastCarbConfirm:
+            return p.boostV5FastCarbConfirm != stock.boostV5FastCarbConfirm
+        case .confirmedCapU where p.boostV5ConfirmedCapUUserSet,
+             .committedCapU where p.boostV5CommittedCapUUserSet,
+             .cumulativeSmbCap60Min where p.boostCumulativeSmbCap60MinUserSet:
+            return true
+        default:
+            return BoostV5AutoConfigApply.isUserTuned(
+                storedValue: boostKnobValue(knob, p),
+                factoryDefaults: BoostV5AutoConfigApply.factoryDefaults(
+                    knob, currentDefault: boostKnobValue(knob, stock)
+                )
+            )
         }
     }
 
     /// Auto-config: when the user runs Boost V5 active, seed the V5 knobs from their own
     /// last-14-day prior (oref) dosing + glycaemia. Suggestion-only: writes a knob ONLY while the
-    /// user hasn't tuned it (caps: `…UserSet` flag; others: value differs from factory default).
+    /// user hasn't tuned it (caps: `…UserSet` flag; others: value differs from EVERY factory
+    /// default the knob ever shipped with — old-build users aren't frozen at an old era's value,
+    /// AAPS fe9d8a1a13). Dose-cap RAISES are additionally held back (surfaced as suggestions via
+    /// the router) when the 14-day TBR<70 exceeds `BoostV5AutoConfigApply.tbrRaiseGuardPct`.
     /// Each knob resolves individually (AAPS b2c0705e5e, see `BoostV5AutoConfigApply`): applied
-    /// once, or skipped-because-user-tuned, and then never revisited — the legacy global
-    /// `boostV5AutoConfigDone` one-shot suppressed knobs ADDED to auto-config later (and could be
-    /// carried in via a settings import); a set legacy flag now migrates to per-knob marks
-    /// (off-default knobs resolved, at-stock knobs re-derivable) and is cleared. If there isn't
-    /// enough history yet, nothing resolves and every open knob retries on a later cycle. Fully
-    /// self-contained — any error is logged and swallowed, never affecting dosing.
+    /// once, or skipped-because-user-tuned, or held-as-TBR-suggestion, and then never revisited —
+    /// the legacy global `boostV5AutoConfigDone` one-shot suppressed knobs ADDED to auto-config
+    /// later (and could be carried in via a settings import); a set legacy flag migrates to
+    /// per-knob marks (tuned knobs resolved, at-stock knobs re-derivable) and is cleared. A
+    /// versioned schema re-migration (AAPS 131923247e) re-audits persisted marks when the
+    /// resolution semantics change. If there isn't enough history yet, nothing resolves and every
+    /// open knob retries on a later cycle. Fully self-contained — any error is logged and
+    /// swallowed, never affecting dosing.
     ///
     /// NOTE: written against verified Trio APIs but NOT yet compiled in Xcode — confirm the field
     /// names `PumpHistoryEvent.timestamp`, `GlucoseStored.glucose`/`.date`, and `pumpSettings.maxBolus`
@@ -1087,6 +1099,32 @@ final class BaseAPSManager: APSManager, Injectable {
                 .apsManager,
                 "BoostV5 auto-config: migrated legacy done-flag → per-knob; resolved=\(migrated.map(\.rawValue))"
             )
+        }
+
+        // Versioned re-migration of the persisted resolved marks (idempotent; stamps the schema
+        // version; MUST run before the steady-state early-return — a stranded install has every
+        // knob resolved). v2 re-opens knobs an era-blind isUserTuned could have mis-resolved at
+        // OLD factory values. Mirrors AAPS 131923247e; on Trio no RELEASED build ever persisted
+        // era-blind marks (per-knob resolution + historical awareness land together), so this is
+        // a scaffold + source-builder rescue — see BoostV5AutoConfigApply.autoConfigSchemaVersion.
+        if settingsManager.preferences.boostV5AutoConfigSchemaVersion < BoostV5AutoConfigApply.autoConfigSchemaVersion {
+            var prefs = settingsManager.preferences
+            let reopened = BoostV5AutoConfigApply.runSchemaMigrations(
+                storedVersion: prefs.boostV5AutoConfigSchemaVersion,
+                knobs: BoostAutoConfigKnob.doubleKnobs,
+                isResolved: { prefs.boostV5AutoConfigResolved.contains($0.rawValue) },
+                isUserTuned: { Self.boostKnobUserTuned($0, prefs, stock: stock) },
+                clearResolved: { knob in prefs.boostV5AutoConfigResolved.removeAll { $0 == knob.rawValue } },
+                setVersion: { prefs.boostV5AutoConfigSchemaVersion = $0 }
+            )
+            settingsManager.preferences = prefs
+            for knob in reopened {
+                debug(
+                    .apsManager,
+                    "BoostV5 auto-config re-migration v2: \(knob.rawValue) value " +
+                        "\(Self.boostKnobValue(knob, prefs)) matches historical factory — re-opened for derivation"
+                )
+            }
         }
 
         // Steady state: everything resolved → nothing to do (cheap check, no data pulls).
@@ -1144,26 +1182,24 @@ final class BaseAPSManager: APSManager, Injectable {
                 return
             }
 
-            // Per-knob suggestion-only seeding (AAPS b2c0705e5e, via BoostV5AutoConfigApply):
-            // each open knob is applied unless the user tuned it (caps: explicit `…UserSet` flag —
-            // set only when the user moves the slider — OR value off default; others: value off
-            // factory default); either way it resolves exactly once and is never revisited.
+            // Per-knob suggestion-only seeding (AAPS b2c0705e5e + fe9d8a1a13, via
+            // BoostV5AutoConfigApply): each open knob is applied unless the user tuned it (caps:
+            // explicit `…UserSet` flag OR value off EVERY-era factory; others: value off factory
+            // default); dose-cap RAISES are held back (suggestion-only) when TBR<70 exceeds the
+            // guard threshold; the cumulative cap is recomputed inside from the final operative
+            // per-shot caps. Either way each knob resolves exactly once and is never revisited.
             // Tuning one knob never blocks the others.
             var prefs = settingsManager.preferences
             func resolved(_ k: BoostAutoConfigKnob) -> Bool { prefs.boostV5AutoConfigResolved.contains(k.rawValue) }
             func markResolved(_ k: BoostAutoConfigKnob) {
                 if !resolved(k) { prefs.boostV5AutoConfigResolved.append(k.rawValue) }
             }
-            let doubleKnobs: [(knob: BoostAutoConfigKnob, value: Double)] = [
-                (.aggression, s.aggression),
-                (.hypoCaution, s.hypoCaution),
-                (.confirmedCapU, s.confirmedCapU),
-                (.committedCapU, s.committedCapU),
-                (.cumulativeSmbCap60Min, s.cumulativeSmbCap60MinU)
-            ]
-            let applied = BoostV5AutoConfigApply.applyAutoConfig(
-                knobs: doubleKnobs,
+            let resolutions = BoostV5AutoConfigApply.applyAutoConfig(
+                suggestion: s,
+                tbrBelow70Pct: tbr70,
                 isResolved: resolved,
+                storedValue: { Self.boostKnobValue($0, prefs) },
+                currentDefault: { Self.boostKnobValue($0, stock) },
                 isUserTuned: { Self.boostKnobUserTuned($0, prefs, stock: stock) },
                 put: { knob, value in
                     switch knob {
@@ -1179,18 +1215,46 @@ final class BaseAPSManager: APSManager, Injectable {
             )
             // Boolean knob (mirrors the Kotlin plugin): apply only while still at the factory
             // default, then resolve either way.
+            var fastCarbApplied: String?
             if !resolved(.fastCarbConfirm) {
                 if prefs.boostV5FastCarbConfirm == stock.boostV5FastCarbConfirm {
                     prefs.boostV5FastCarbConfirm = s.fastCarbConfirm
+                    if s.fastCarbConfirm != stock.boostV5FastCarbConfirm {
+                        fastCarbApplied = "fastCarbConfirm=\(s.fastCarbConfirm)"
+                    }
                 }
                 markResolved(.fastCarbConfirm)
             }
             settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
-            debug(
-                .apsManager,
-                "BoostV5 auto-config applied \(applied.map { "\($0.knob.rawValue)=\($0.value)" }) " +
-                    "from \(daysWithData)d history: \(s.rationale)"
-            )
+
+            // Log every classification verbatim so field diagnosis never needs inference
+            // (AAPS fe9d8a1a13).
+            for r in resolutions {
+                debug(.apsManager, "BoostV5 auto-config: \(r.knob.rawValue) → \(r.reason)")
+            }
+            let applied = resolutions.filter { $0.outcome == .applied }
+                .map { "\($0.knob.rawValue)=\($0.suggestedValue)" } + (fastCarbApplied.map { [$0] } ?? [])
+            debug(.apsManager, "BoostV5 auto-config applied \(applied) from \(daysWithData)d history: \(s.rationale)")
+
+            // Surface a user notification only when something actually changed or a cap raise was
+            // held back as a suggestion (AAPS fe9d8a1a13 — TBR raise-guard; Trio idiom:
+            // router.alertMessage). Announcing "configured" while changing nothing would be the
+            // confusing behaviour the AAPS banner logic avoids.
+            let heldSuggestions = resolutions.filter { $0.outcome == .suggestedNotAppliedTbr }
+                .map {
+                    "\($0.knob.rawValue): suggested \($0.suggestedValue) U from your history — not auto-applied " +
+                        "because time-below-70 is \((tbr70 * 10).rounded() / 10)%; set manually if desired"
+                }
+            if !applied.isEmpty || !heldSuggestions.isEmpty {
+                let pretty = (applied + heldSuggestions).map { "• \($0)" }.joined(separator: "\n")
+                router.alertMessage.send(MessageContent(
+                    content: "Boost V6 set \(applied.count) setting(s) from your last 14 days " +
+                        "(your other settings were kept):\n\(pretty)",
+                    type: .info,
+                    subtype: .algorithm,
+                    title: "Boost V6 auto-config"
+                ))
+            }
         } catch {
             debug(.apsManager, "BoostV5 auto-config failed (non-fatal): \(error)")
         }
