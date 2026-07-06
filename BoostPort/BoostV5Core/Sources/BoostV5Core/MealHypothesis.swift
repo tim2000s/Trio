@@ -36,6 +36,20 @@ public enum MealHypothesisConstants {
     public static let confirmScore = 0.55
     public static let confirmEventualBgOffsetMgdl = 30.0
     public static let confirmMinObservingAge = 2
+    /// 2026-07-03 sustained-score early confirm (AAPS 242a6e179d): OBSERVING → CONFIRMED may fire
+    /// ONE cycle before `confirmMinObservingAge` when the INSTANTANEOUS score has been ≥
+    /// `confirmScore` on BOTH this cycle and the immediately preceding one (`scoreReadyStreak` —
+    /// supplied by the caller, same cross-cycle-input pattern as `deltaDeclining`). All other
+    /// confirm conditions (peak eventualBG offset ≥ 30, confirmDoseAdequate, !committedInSession)
+    /// are unchanged.
+    ///
+    /// WHY: replay vs the cohort DB (2026-07-03) showed 53% of confirm latency was purely
+    /// mechanical — the score was already ≥ confirmScore for ≥2 cycles before the age gate opened.
+    /// Shifting the SAME commit-shot 1 cycle earlier measured 0.0pp additional pre-low exposure,
+    /// vs +14–17% for added-insulin levers evaluated in the same sweep. The early path requires
+    /// the CURRENT score ≥ threshold (not just the tracked max) because the whole point is a
+    /// sustained-ready score, not a transient peak.
+    public static let confirmMinObservingAgeScoreReady = confirmMinObservingAge - 1
     /// 2026-07-02 dose-adequacy gate: the confirm floor is committedCapU, clamped to at most this
     /// fraction of confirmedCapU so a manual committedCap ≥ confirmedCap can't make the gate
     /// unsatisfiable (which would silently disable V6's meal response). See BoostV5Engine.decide().
@@ -49,9 +63,15 @@ public enum MealHypothesisConstants {
     public static let recoveringReengageDelta = 3.0
     public static let recoveringReengageOffsetMgdl = 20.0
     public static let recoveringReengageMinAge = 1
-    public static let fastConfirmDelta = 8.0
-    public static let fastConfirmAccl = 15.0
-    public static let fastConfirmScore = 0.60
+    // 2026-07-03 retune (AAPS d2f9a08108; replay sweep over the cohort): Δ 8→6, accl 15→10,
+    // score 0.60→0.65. This point catches +21 meals ~9 min earlier while REDUCING false fires
+    // 39%→32% — the score raise pays for the physics relaxation. A plain physics relaxation
+    // WITHOUT the score raise is worse (40% false); the tighter score gate is what makes the
+    // looser Δ/accl thresholds safe. All guards (awake, not exercising, recentLowBg ≥ 80,
+    // !committedInSession, pref toggle) unchanged.
+    public static let fastConfirmDelta = 6.0 // mg/dL per 5 min — sharp rise (2026-07-03: 8.0 → 6.0)
+    public static let fastConfirmAccl = 10.0 // delta_accl % — accelerating (2026-07-03: 15.0 → 10.0)
+    public static let fastConfirmScore = 0.65 // meal score must corroborate (2026-07-03: 0.60 → 0.65; > enterObserving 0.44)
     /// 2026-07-02 post-hypo rescue-carb guard: the fast-carb fast-path is suppressed when the 60-min
     /// BG low is below this. A rescue-carb rebound routinely satisfies delta≥8 + accl≥15 + score≥0.60,
     /// and the fast path is EXEMPT from the confirmDoseAdequate gate — so it was the only unguarded
@@ -66,6 +86,33 @@ public enum MealHypothesisEngine {
     /// passed to `step` as `fastConfirmEnabled` — same pattern as `confirmDoseAdequate`. (AAPS 1245d33a9a)
     public static func fastConfirmAllowed(_ fastCarbConfirmEnabled: Bool, recentLowBg: Double) -> Bool {
         fastCarbConfirmEnabled && recentLowBg >= MealHypothesisConstants.fastConfirmMinRecentLowMgdl
+    }
+
+    /// OBSERVING → CONFIRMED eligibility EXCLUDING the dose-adequacy gate — the exact
+    /// sub-conditions `step`'s OBSERVING branch checks (age gate incl. the 2026-07-03
+    /// sustained-score early path, peak score, peak eventualBG offset, single-confirm-per-session
+    /// lock), minus `confirmDoseAdequate`. `step` calls this SAME function for its dosing
+    /// decision, so any caller-side use (e.g. gate diagnostics) can never diverge from what the
+    /// state machine doses with. (AAPS 242a6e179d / 6067ec9a6d.)
+    public static func confirmEligibleExceptDoseGate(
+        current: MealHypothesisState,
+        score: Double,
+        eventualBg: Double,
+        targetBg: Double,
+        scoreReadyStreak: Bool = false
+    ) -> Bool {
+        let C = MealHypothesisConstants.self
+        if current.state != .observing || current.committedInSession { return false }
+        let newMaxScore = max(current.maxScoreInObserving, score)
+        let newMaxOffset = max(current.maxEventualBgOffsetInObserving, eventualBg - targetBg)
+        let age = current.ageCycles
+        // 2026-07-03: age gate opens one cycle early when the score has been ≥ confirmScore on
+        // BOTH this cycle and the previous one (see confirmMinObservingAgeScoreReady). The early
+        // path checks the CURRENT score, not the tracked max — a sustained-ready score, not a
+        // transient peak, is what justifies shaving the hysteresis.
+        let ageEligible = age >= C.confirmMinObservingAge ||
+            (age >= C.confirmMinObservingAgeScoreReady && score >= C.confirmScore && scoreReadyStreak)
+        return ageEligible && newMaxScore >= C.confirmScore && newMaxOffset >= C.confirmEventualBgOffsetMgdl
     }
 
     /// Single-step transition. Pure; caller threads state across cycles.
@@ -84,7 +131,13 @@ public enum MealHypothesisEngine {
         // commit-shot (budget × CONFIRMED mult) exceeds one routine COMMITTED hold (committedCapU,
         // clamped < confirmedCapU). Defaults true so the fast-carb path and existing callers/tests are
         // unaffected.
-        confirmDoseAdequate: Bool = true
+        confirmDoseAdequate: Bool = true,
+        // 2026-07-03 (AAPS 242a6e179d): sustained-score early confirm. True when the PREVIOUS
+        // cycle's score was already ≥ confirmScore — computed by the caller from last cycle's
+        // score (cross-cycle input, same pattern as deltaDeclining). With the CURRENT score also
+        // ≥ confirmScore, the age gate opens one cycle early (confirmMinObservingAgeScoreReady).
+        // Defaults false = legacy timing for all existing callers/tests.
+        scoreReadyStreak: Bool = false
     ) -> MealHypothesisState {
         let C = MealHypothesisConstants.self
         let state = current.state
@@ -117,11 +170,14 @@ public enum MealHypothesisEngine {
         case .observing:
             let newMaxScore = max(maxScore, score)
             let newMaxOffset = max(maxOffset, currentOffset)
-            let confirmEligible = age >= C.confirmMinObservingAge &&
-                newMaxScore >= C.confirmScore &&
-                newMaxOffset >= C.confirmEventualBgOffsetMgdl &&
-                confirmDoseAdequate && // 2026-07-02: don't spend the token on a shot < one COMMITTED hold
-                !committedInSession
+            // Eligibility sub-conditions (age gate incl. the 2026-07-03 sustained-score early
+            // path, peak score, peak offset, session lock) live in confirmEligibleExceptDoseGate —
+            // the single shared predicate, so a caller-side eligibility read can never diverge
+            // from the dosing decision. (AAPS 242a6e179d.)
+            let confirmEligible = confirmEligibleExceptDoseGate(
+                current: current, score: score, eventualBg: eventualBg, targetBg: targetBg,
+                scoreReadyStreak: scoreReadyStreak
+            ) && confirmDoseAdequate // 2026-07-02: don't spend the token on a shot < one COMMITTED hold
             if fastConfirm, !committedInSession {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
             } else if confirmEligible {

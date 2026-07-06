@@ -100,14 +100,30 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
     /// Epoch-ms of the last decide() — the host uses it to detect a time jump / long gap
     /// (incl. app restart) and reset the meal hypothesis. Managed by the adapter, not decide().
     public var lastRunMs: Double?
+    /// Previous cycle's meal_signal_score — input to the sustained-score early confirm
+    /// (`confirmMinObservingAgeScoreReady`, 2026-07-03, AAPS 242a6e179d). Deliberately NOT
+    /// serialized (excluded from CodingKeys, mirroring the AAPS in-memory-cache-only idiom):
+    /// it survives across cycles only via BoostV5Store's in-memory cache, so a process restart
+    /// loses it, which fails safe (streak=false → legacy confirm timing for one cycle).
+    public var lastCycleScore: Double? = nil
+
+    enum CodingKeys: String, CodingKey {
+        // lastCycleScore intentionally omitted — in-memory only (see its doc comment).
+        case mealHypothesis
+        case mlMealLikelyNullStreak
+        case lastRunMs
+    }
+
     public init(
         mealHypothesis: MealHypothesisState = MealHypothesisState(),
         mlMealLikelyNullStreak: Int = 0,
-        lastRunMs: Double? = nil
+        lastRunMs: Double? = nil,
+        lastCycleScore: Double? = nil
     ) {
         self.mealHypothesis = mealHypothesis
         self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
         self.lastRunMs = lastRunMs
+        self.lastCycleScore = lastCycleScore
     }
 }
 
@@ -172,6 +188,11 @@ public enum BoostV5Engine {
         )
         let confirmDoseAdequate = prospectiveConfirmShot > confirmDoseFloor
 
+        // 2026-07-03 sustained-score early confirm input (AAPS 242a6e179d): was LAST cycle's
+        // score already confirm-ready? Sourced from the in-memory persisted state (nil on cold
+        // start → false → legacy timing).
+        let scoreReadyStreak = (persisted.lastCycleScore ?? 0.0) >= MealHypothesisConstants.confirmScore
+
         let newHypothesisState = MealHypothesisEngine.step(
             current: resetState, score: scoreResult.score, eventualBg: inputs.eventualBg,
             targetBg: inputs.targetBg, delta: inputs.delta, deltaAccl: inputs.deltaAccl,
@@ -183,7 +204,8 @@ public enum BoostV5Engine {
             fastConfirmEnabled: MealHypothesisEngine.fastConfirmAllowed(
                 inputs.fastCarbConfirmEnabled, recentLowBg: inputs.recentLowBg
             ),
-            confirmDoseAdequate: confirmDoseAdequate
+            confirmDoseAdequate: confirmDoseAdequate,
+            scoreReadyStreak: scoreReadyStreak // 2026-07-03 sustained-score early confirm (hoisted above)
         )
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
@@ -211,7 +233,11 @@ public enum BoostV5Engine {
             mlWeightsRenormalized: scoreResult.mlWeightsRenormalized, mealHypothesis: newHypothesisState.state,
             mealHypothesisAge: newHypothesisState.ageCycles, stateReset: didReset, aggressionBudget: budget,
             actionMultiplier: actionMult, insulinToDeliver: insulinToDeliver, phase3: phase3,
-            newPersistedState: V5PersistedState(mealHypothesis: newHypothesisState, mlMealLikelyNullStreak: nextNullStreak)
+            newPersistedState: V5PersistedState(
+                mealHypothesis: newHypothesisState,
+                mlMealLikelyNullStreak: nextNullStreak,
+                lastCycleScore: scoreResult.score // 2026-07-03: next cycle's scoreReadyStreak input
+            )
         )
     }
 }
