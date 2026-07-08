@@ -192,14 +192,42 @@ final class StepSourceBridgeTests: XCTestCase {
         XCTAssertEqual(r.history.days.first { $0.dayIndex == 4 }!.source, "appleWatch") // worn drove it
     }
 
-    func testPhoneAnchoredWindowDuringWarmupFallsBackToPhoneDayOrRaw() {
-        // iPhone has only 2 days (< minOverlapDays) so appleWatch can't be scaled yet.
+    func testPhoneAnchoredWindowDuringWarmupHoldsHigherRawWorn() {
+        // iPhone has only 2 days (< minOverlapDays) so appleWatch can't be scaled yet. Hold-higher
+        // (2026-07-03, AAPS ecec9075b5): even uncalibrated, a higher raw-worn count is HELD over the
+        // phone's own lower day — undercount (false inactivity) is the unsafe direction.
         let phone = srcHist("iphone", [8: 7000, 9: 7000])
         let wear = srcHist("appleWatch", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 14000) }))
         let r = T.phoneAnchoredWindow(msh(phone, wear), todayIndex: 10)
-        XCTAssertFalse(r.calibrated) // raw fallback used
-        XCTAssertEqual(r.history.steps(forDay: 8)!, 7000) // phone's own day where it has one
-        XCTAssertEqual(r.history.steps(forDay: 0)!, 14000) // else appleWatch raw (flagged)
+        XCTAssertFalse(r.calibrated) // raw-worn used (uncalibrated) → not calibrated
+        XCTAssertEqual(r.history.steps(forDay: 8)!, 14000) // raw wear 14000 held over phone's 7000
+        XCTAssertEqual(r.history.steps(forDay: 0)!, 14000) // phone lacks day 0 → appleWatch raw
+        // Yesterday (day 9) held wear over the lower phone count → breadcrumb records the reconcile.
+        XCTAssertEqual(r.heldNote, "held appleWatch 14000 over iphone 7000")
+    }
+
+    func testMergeRevisesDayUpOnlyNeverDown() {
+        // Hold-higher: a completed day recorded at 6224 must not be dragged down by a later lower
+        // sync (2227 — the 2026-07-03 undercount). A higher later value DOES revise it up.
+        var h = T.merge(T.StepHistory(), totals: [Day(dayIndex: 5, steps: 6224, source: "appleWatch")], todayIndex: 8)
+        h = T.merge(h, totals: [Day(dayIndex: 5, steps: 2227, source: "appleWatch")], todayIndex: 8)
+        XCTAssertEqual(h.steps(forDay: 5)!, 6224) // lower sync ignored
+        h = T.merge(h, totals: [Day(dayIndex: 5, steps: 6500, source: "appleWatch")], todayIndex: 8)
+        XCTAssertEqual(h.steps(forDay: 5)!, 6500) // higher sync revises up
+    }
+
+    func testPhoneAnchoredWindowRolloverHoldsHigherSource() {
+        // The 2026-07-02 case: wear counted 6224 for yesterday but the phone (pocketed) only 3095.
+        // Hold-higher records 6224 and the breadcrumb names the reconcile.
+        let phone = srcHist("iphone", Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 3095) }))
+        var wearDays = Dictionary(uniqueKeysWithValues: (0 ... 9).map { ($0, 3000) })
+        wearDays[9] = 6224 // yesterday: watch counted far more than the pocketed phone
+        let wear = srcHist("appleWatch", wearDays)
+        let r = T.phoneAnchoredWindow(msh(phone, wear), todayIndex: 10)
+        // ≥ minOverlapDays of overlap → wear scales into phone units; median(3095/3000) ≈ 1.03.
+        XCTAssertGreaterThan(r.history.steps(forDay: 9)!, 3095) // held the higher (scaled) worn count
+        XCTAssertNotNil(r.heldNote)
+        XCTAssertTrue(r.heldNote!.contains("held appleWatch"))
     }
 
     func testToPhoneUnitsScalesWornTodayCount() {

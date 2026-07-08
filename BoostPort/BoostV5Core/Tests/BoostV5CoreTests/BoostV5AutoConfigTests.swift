@@ -178,10 +178,11 @@ final class BoostV5AutoConfigTests: XCTestCase {
             )
         }
 
-        func apply(_ s: BoostV5AutoConfig.Suggestion, tbr: Double) -> [Apply.Resolution] {
+        func apply(_ s: BoostV5AutoConfig.Suggestion, tbr: Double, sev54: Double = 0.0) -> [Apply.Resolution] {
             Apply.applyAutoConfig(
                 suggestion: s,
                 tbrBelow70Pct: tbr,
+                timeBelow54Pct: sev54,
                 isResolved: { self.resolved.contains($0) },
                 storedValue: { self.store[$0] },
                 currentDefault: { BoostV5AutoConfigTests.stockDefault($0) },
@@ -345,6 +346,52 @@ final class BoostV5AutoConfigTests: XCTestCase {
         let res = f.apply(s, tbr: 2.0)
         XCTAssertTrue(appliedKnobs(res).contains(.committedCapU))
         XCTAssertEqual(f.store[.committedCapU], s.committedCapU)
+    }
+
+    // MARK: <54 severe co-guard on the raise-guard (AAPS 13c9bc4d53, cohort user B)
+
+    func testDoseCapRaiseHeldByServe54GuardEvenWhenTbr70UnderLine() {
+        // user-B pattern: <70 3.83% (UNDER the 4.0% line) but <54 1.01% (OVER the 1.0% severe line).
+        // The <70-only guard would let the raise through; the <54 co-guard must hold it.
+        let s = BoostV5AutoConfig.compute(prior(tbr70: 3.83))!
+        XCTAssertGreaterThan(s.committedCapU, Self.stockDefault(.committedCapU))
+        let f = FakeStore()
+        let res = f.apply(s, tbr: 3.83, sev54: 1.01)
+        let held = res.first { $0.knob == .committedCapU }!
+        XCTAssertEqual(held.outcome, .suggestedNotAppliedTbr)
+        XCTAssertTrue(held.reason.contains("<54=1.01%"))
+        XCTAssertNil(f.store[.committedCapU])
+    }
+
+    func testServe54GuardBoundaryAtExactlyOnePercentHolds() {
+        // The <54 guard is inclusive (>= 1.0), so exactly 1.0% holds the raise.
+        let s = BoostV5AutoConfig.compute(prior(tbr70: 2.0))!
+        XCTAssertGreaterThan(s.committedCapU, Self.stockDefault(.committedCapU))
+        let f = FakeStore()
+        let res = f.apply(s, tbr: 2.0, sev54: 1.0)
+        XCTAssertEqual(res.first { $0.knob == .committedCapU }!.outcome, .suggestedNotAppliedTbr)
+    }
+
+    func testRaiseAppliesWhenBothGuardsUnderTheirLines() {
+        // <70 under 4.0% AND <54 under 1.0% → the raise applies normally.
+        let s = BoostV5AutoConfig.compute(prior(tbr70: 2.0))!
+        XCTAssertGreaterThan(s.committedCapU, Self.stockDefault(.committedCapU))
+        let f = FakeStore()
+        let res = f.apply(s, tbr: 2.0, sev54: 0.9)
+        XCTAssertTrue(appliedKnobs(res).contains(.committedCapU))
+        XCTAssertEqual(f.store[.committedCapU], s.committedCapU)
+    }
+
+    func testDoseCapLoweringAppliesEvenWithSevere54Exposure() {
+        // Tightenings must never be blocked, even at <54 2.0% — a lowering is protective.
+        let s = BoostV5AutoConfig.compute(prior(
+            manual: [0.5, 0.5, 0.5, 0.5], smb: [0.2, 0.2, 0.3], tbr70: 2.0
+        ))!
+        XCTAssertEqual(s.confirmedCapU, 1.5)
+        let f = FakeStore()
+        let res = f.apply(s, tbr: 2.0, sev54: 2.0)
+        XCTAssertTrue(appliedKnobs(res).contains(.confirmedCapU))
+        XCTAssertEqual(f.store[.confirmedCapU], 1.5)
     }
 
     func testOnceAppliedKnobIsResolvedAndNeverReapplied() {

@@ -31,6 +31,21 @@ public struct V5Inputs {
     public var asleep: Bool
     public var fastCarbConfirmEnabled: Bool
     public var sensorQualityOk: Bool
+    /// True when inside the post-rescue window (rolling 45-min CGM low < 75 mg/dL — same source and
+    /// threshold as the override seam's post-rescue cap). Gates the composed floor off (both the
+    /// would-add computation and, when `composedFloorActive`, the delivered floor). 2026-07-06, AAPS
+    /// e0f18ddd0e / 730b3dcb2c.
+    public var postRescueWindow: Bool
+    /// V1's would-dose SMB this cycle (the base determination's `units`, BEFORE any V6 override), U.
+    /// Used only by the composed floor: RECOVERING is a non-meal state capped at V1's would-dose at
+    /// the override seam (2026-07-04 non-meal-state cap), so the floored dose is bounded the same
+    /// way. Nil = bound unavailable (not applied).
+    public var v1WouldDoseU: Double?
+    /// Composed brake-floor ACTIVATION (`boostV5ComposedFloorActive` AND V6 is the active doser).
+    /// False (default) = shadow: `floorWouldAdd` logs what the floor WOULD add, delivered dosing
+    /// untouched. True = the delivered dose is floored at the composed-floor target on qualifying
+    /// cycles (see decide()). Per-user activation only — TBR-gated by guidance. 2026-07, AAPS 730b3dcb2c.
+    public var composedFloorActive: Bool
     // Reset triggers
     public var profileSwitched: Bool
     public var pumpDisconnected: Bool
@@ -50,7 +65,9 @@ public struct V5Inputs {
         enableSmbPreChecks: Bool, mlHypoRisk: Double? = nil, mlMealLikely: Double? = nil,
         riskAtProjectedIob: ((Double) -> Double)? = nil, recentLowBg: Double, cumulativeRise30min: Double,
         hour: Int, exerciseActive: Bool, inPostExerciseWindow: Bool, asleep: Bool = false,
-        fastCarbConfirmEnabled: Bool = false, sensorQualityOk: Bool = true, profileSwitched: Bool = false,
+        fastCarbConfirmEnabled: Bool = false, sensorQualityOk: Bool = true,
+        postRescueWindow: Bool = false, v1WouldDoseU: Double? = nil, composedFloorActive: Bool = false,
+        profileSwitched: Bool = false,
         pumpDisconnected: Bool = false, loopSuspended: Bool = false, timeJumpMinutes: Double = 0.0,
         aggressionUserKnob: Double = 1.0, hypoCautionUserKnob: Double = 1.0, sensitivityUserKnob: Double = 1.0,
         confirmedCapU: Double = SafetyGateConstants.maxConfirmedCommitDoseU,
@@ -82,6 +99,9 @@ public struct V5Inputs {
         self.asleep = asleep
         self.fastCarbConfirmEnabled = fastCarbConfirmEnabled
         self.sensorQualityOk = sensorQualityOk
+        self.postRescueWindow = postRescueWindow
+        self.v1WouldDoseU = v1WouldDoseU
+        self.composedFloorActive = composedFloorActive
         self.profileSwitched = profileSwitched
         self.pumpDisconnected = pumpDisconnected
         self.loopSuspended = loopSuspended
@@ -139,6 +159,14 @@ public struct V5Decision {
     public let actionMultiplier: Double
     public let insulinToDeliver: Double
     public let phase3: Phase3Result
+    /// Composed Phase-3 floor (F = `ComposedFloor.fraction`) telemetry — dual semantics keyed on
+    /// `V5Inputs.composedFloorActive`; nil when the floor conditions are unmet either way:
+    ///  - toggle OFF (shadow): extra U the floor WOULD have added this cycle vs the pipeline output;
+    ///    never affects `finalDose`.
+    ///  - toggle ON (activation): the uplift actually APPLIED to `finalDose` (delivered-with-floor −
+    ///    what-unfloored-would-have-delivered); 0.0 when no uplift.
+    /// See `ComposedFloor.targetDose`. 2026-07-06/07, AAPS e0f18ddd0e + 730b3dcb2c.
+    public let floorWouldAdd: Double?
     public let newPersistedState: V5PersistedState
 }
 
@@ -182,9 +210,12 @@ public enum BoostV5Engine {
         let velocityFactor = SafetyGates.velocityScaledDoseFactor(inputs.cumulativeRise30min)
         let prospectiveConfirmShot = budget.budget *
             MealActionMultiplier.value(for: .confirmed, aggressionUserKnob: inputs.aggressionUserKnob) * velocityFactor
-        let confirmDoseFloor = min(
-            inputs.committedCapU,
-            MealHypothesisConstants.confirmDoseFloorMaxFracOfConfirmedCap * inputs.confirmedCapU
+        // 2026-07-06 (AAPS 311703ddf5): the committedCap term of the floor is PINNED at the factory
+        // default (0.5 U) so a user-raised committedCap can't silently tighten the confirm gate —
+        // see MealHypothesisConstants.confirmDoseFloorU.
+        let confirmDoseFloor = MealHypothesisConstants.confirmDoseFloorU(
+            committedCapU: inputs.committedCapU,
+            confirmedCapU: inputs.confirmedCapU
         )
         let confirmDoseAdequate = prospectiveConfirmShot > confirmDoseFloor
 
@@ -228,16 +259,132 @@ public enum BoostV5Engine {
             riskAtProjectedIob: inputs.riskAtProjectedIob, mlHypoRisk: inputs.mlHypoRisk
         ))
 
+        // 2026-07-06/07 composed Phase-3 floor (AAPS e0f18ddd0e + 730b3dcb2c). Computed here because
+        // this is the one place the whole composed multiplier stack (state mult × velocityFactor ×
+        // iobHeadroomBrake × decelerationBrake) has already been applied (phase3.finalDose). Target
+        // semantics: nil = floor conditions unmet; 0.0 = a Phase-3 HARD gate fired; else the bounded
+        // floored dose min(budget × F, committedCapU) (v1-bounded in RECOVERING). See ComposedFloor.
+        let floorTarget = ComposedFloor.targetDose(
+            state: newHypothesisState.state,
+            bg: inputs.bg,
+            eventualBg: inputs.eventualBg,
+            targetBg: inputs.targetBg,
+            asleep: inputs.asleep,
+            postRescueWindow: inputs.postRescueWindow,
+            budgetU: budget.budget,
+            committedCapU: inputs.committedCapU,
+            v1WouldDoseU: inputs.v1WouldDoseU,
+            hardGateFired: phase3.reductions.hardGateFired != nil
+        )
+        let finalDose: Double
+        let floorWouldAdd: Double?
+        if !inputs.composedFloorActive {
+            // SHADOW (toggle OFF, or V6 not the active doser) — zero dosing-path effect; the field
+            // records what the floor WOULD have added.
+            finalDose = phase3.finalDose
+            floorWouldAdd = floorTarget.map { max(0.0, $0 - phase3.finalDose) }
+        } else {
+            // ACTIVE (per-user activation): deliver max(pipeline dose, floored dose). The floored
+            // dose passes through the SAME downstream clamps the pipeline dose already received after
+            // the soft-brake product, so no hard gate or cap is bypassed (see ComposedFloor). The
+            // override-seam caps (non-meal v1-bound, post-rescue cap, cumulative cap, sleep/boost-
+            // active gates) all still run downstream on finalDose; RECOVERING is v1-bounded inside
+            // the target so the logged uplift matches what the seam delivers.
+            let deliverableFloor: Double = floorTarget.map { target in
+                var f = min(target, max(0.0, inputs.maxIob - inputs.iob))
+                f = min(f, SafetyGates.dynamicSpikeCap(inputs.baseInsulinReq))
+                if inputs.roundSmbTo > 0.0 { f = floor(f / inputs.roundSmbTo + 1E-9) * inputs.roundSmbTo }
+                return max(0.0, f)
+            } ?? 0.0
+            finalDose = max(phase3.finalDose, deliverableFloor)
+            floorWouldAdd = floorTarget.map { _ in finalDose - phase3.finalDose }
+        }
+
         return V5Decision(
-            finalDose: phase3.finalDose, score: scoreResult.score, scoreComponents: scoreResult.components,
+            finalDose: finalDose, score: scoreResult.score, scoreComponents: scoreResult.components,
             mlWeightsRenormalized: scoreResult.mlWeightsRenormalized, mealHypothesis: newHypothesisState.state,
             mealHypothesisAge: newHypothesisState.ageCycles, stateReset: didReset, aggressionBudget: budget,
             actionMultiplier: actionMult, insulinToDeliver: insulinToDeliver, phase3: phase3,
+            floorWouldAdd: floorWouldAdd,
             newPersistedState: V5PersistedState(
                 mealHypothesis: newHypothesisState,
                 mlMealLikelyNullStreak: nextNullStreak,
                 lastCycleScore: scoreResult.score // 2026-07-03: next cycle's scoreReadyStreak input
             )
         )
+    }
+}
+
+// MARK: - Composed Phase-3 floor (F = 0.25) — shadow first, per-user activatable
+
+/// 2026-07-06/07 composed Phase-3 floor (AAPS e0f18ddd0e + 730b3dcb2c).
+///
+/// Forensic + 40,180-cycle cohort backtest: on meal-session high cycles (CONFIRMED/COMMITTED/
+/// RECOVERING ∧ BG > 160 ∧ eventualBG > target+20 ∧ awake ∧ budget > 0) the composed post-budget
+/// multiplier — stateMult × velocityFactor × iobHeadroomBrake × decelerationBrake — has MEDIAN
+/// 0.037. Individually-sane brakes multiply into a product that drives the dose below one pump
+/// step, so it floor-rounds to ZERO for 30+ minutes mid-meal (Episode B: BG 268–277, six
+/// consecutive zero-dose cycles, ended 297 + a manual bolus). A pipeline defect (independent
+/// brakes multiplying), not a calibration issue.
+///
+/// F = 0.25 backtests at +0.76 U/user-day with 16.6% pre-low incidence — the base rate, i.e. no
+/// added hypo exposure. SHADOW first: with the toggle OFF, `targetDose` only feeds the
+/// `floorWouldAdd` telemetry (what the floor WOULD have added) and delivered dosing is untouched.
+/// Activation (`boostV5ComposedFloorActive`, Advanced, default OFF) applies the floor to the
+/// delivered dose — PER-USER only, TBR-gated by guidance (enable only where trailing-14d TBR<70 <
+/// 3.5% AND TBR<54 < 0.8%).
+enum ComposedFloor {
+    /// Floor fraction of the (mlHypoRisk-damped) AggressionBudget the composed multiplier stack may
+    /// not push the dose below on a meal-session high cycle.
+    static let fraction = 0.25
+    /// BG must exceed this (mg/dL) — the "high cycle" condition.
+    static let minBgMgdl = 160.0
+    /// eventualBG must exceed target by more than this (mg/dL).
+    static let minEventualOffsetMgdl = 20.0
+
+    /// The composed Phase-3 floor's target dose (U) for this cycle — the single source of truth for
+    /// BOTH the shadow field (toggle OFF: `wouldAdd = max(0, target − actualFinalDose)`) and the
+    /// delivered floor (toggle ON: `finalDose = max(pipeline, clamped-and-rounded target)`), so the
+    /// two can never diverge.
+    ///
+    /// Returns:
+    ///  - **nil** when the floor conditions are unmet. Conditions (ALL required): meal session
+    ///    (CONFIRMED/COMMITTED/RECOVERING) ∧ bg > 160 ∧ eventualBg > targetBg + 20 ∧ !asleep ∧
+    ///    !postRescueWindow ∧ budget > 0. The budget > 0 condition makes the Episode-A guard hold
+    ///    BY CONSTRUCTION: a zero budget can never produce a floored dose.
+    ///  - **0.0** when a Phase-3 HARD gate fired (enableSMB pre-checks, minGuardBG, maxDelta): those
+    ///    zero the dose regardless of any multiplier floor, so the floor may add nothing.
+    ///  - Otherwise the bounded floored dose = min(budget × F, committedCapU) — one routine hold is
+    ///    the ceiling — additionally bounded at `v1WouldDoseU` in RECOVERING, a NON-meal state at
+    ///    the override seam (capped at V1's would-dose since the 2026-07-04 non-meal-state cap).
+    static func targetDose(
+        state: MealHypothesis,
+        bg: Double,
+        eventualBg: Double,
+        targetBg: Double,
+        asleep: Bool,
+        postRescueWindow: Bool,
+        budgetU: Double,
+        committedCapU: Double,
+        v1WouldDoseU: Double?,
+        hardGateFired: Bool
+    ) -> Double? {
+        let mealSession = state == .confirmed || state == .committed || state == .recovering
+        let conditionsMet = mealSession &&
+            bg > minBgMgdl &&
+            eventualBg > targetBg + minEventualOffsetMgdl &&
+            !asleep &&
+            !postRescueWindow &&
+            budgetU > 0.0
+        if !conditionsMet { return nil }
+        // Hard gates (enableSMB pre-checks, minGuardBG, maxDelta) zero the dose regardless of any
+        // multiplier floor — the floored pipeline would deliver 0 too, so the floor adds nothing.
+        if hardGateFired { return 0.0 }
+        let flooredDose = min(budgetU * fraction, committedCapU)
+        // RECOVERING: v1-bound where applicable (non-meal-state cap at the override seam).
+        if state == .recovering, let v1 = v1WouldDoseU {
+            return min(flooredDose, v1)
+        }
+        return flooredDose
     }
 }

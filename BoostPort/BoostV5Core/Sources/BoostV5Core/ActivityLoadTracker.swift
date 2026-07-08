@@ -232,6 +232,13 @@ public enum ActivityLoadTracker {
 
     /// Merge completed-day `totals` into a source's own history within the window. Today
     /// (`dayIndex >= todayIndex`) is excluded as partial. Mirrors Kotlin `merge(...)`.
+    ///
+    /// HOLD-HIGHER (2026-07-03, AAPS ecec9075b5): within a source, a recorded day is only ever
+    /// revised UP. A later LOWER value for the same day (a stale/partial post-midnight HealthKit
+    /// re-read, a source recount) must not drag a completed day's total down — 2026-07-02 was
+    /// recorded at 2227 and crept to 3095 while the watch had counted 6224, and the shadow read it
+    /// as "0.5× baseline / inactivity". Undercount is the unsafe direction (false inactivity →
+    /// would-LOWER ISF → more insulin), so the day record holds the maximum count ever seen.
     public static func merge(
         _ h: StepHistory,
         totals: [DailyStepTotal],
@@ -241,6 +248,7 @@ public enum ActivityLoadTracker {
         var map: [Int: DailyStepTotal] = [:]
         for d in h.days { map[d.dayIndex] = d }
         for t in totals where t.dayIndex >= (todayIndex - windowDays) && t.dayIndex < todayIndex {
+            if let prev = map[t.dayIndex], prev.steps >= t.steps { continue } // hold-higher: revise up only
             map[t.dayIndex] = t
         }
         let cutoff = todayIndex - windowDays
@@ -281,6 +289,11 @@ public enum ActivityLoadTracker {
         public var history: StepHistory
         public var calibrated: Bool
         public var donorsUsed: [String]
+        /// NS breadcrumb: set when yesterday's total was HELD at a higher source's count over a lower
+        /// competing source (e.g. "held appleWatch 6224 over iphone 3095"). Nil when yesterday had
+        /// one candidate or the candidates agreed. Makes the daily-history reconcile visible — the
+        /// 2026-07-03 undercount was invisible because nothing logged the resolution. (AAPS ecec9075b5.)
+        public var heldNote: String? = nil
     }
 
     /// Build one rolling-window history in `activeSource`'s units for `todayIndex`: use the active
@@ -338,14 +351,20 @@ public enum ActivityLoadTracker {
     /// starts) → zero overlap → no scale → raw forever. The iPhone runs continuously across every watch
     /// era, so it is the one source that overlaps them all: it is the calibration frame.
     ///
-    /// Per day in the window:
-    ///  1. if a worn source (appleWatch > garmin > …) recorded the day AND can be scaled into phone
-    ///     units (≥ `minOverlapDays` of phone↔that-source overlap), use the scaled worn value
-    ///     (worn-when-carried beats phone-when-pocketed for accuracy);
-    ///  2. else use the phone's own value for the day (the phone has every day it was carried);
-    ///  3. else (phone lacks the day and the worn source can't be scaled yet — the phone's warmup
-    ///     window) fall back to the worn value raw, flagged uncalibrated. Self-heals once the phone
-    ///     accrues `minOverlapDays` overlapping days with each worn source.
+    /// Per day in the window, every source that recorded the day becomes a candidate — a worn source
+    /// (appleWatch > garmin > …) expressed in phone units when it can be scaled (≥ `minOverlapDays`
+    /// of phone↔that-source overlap), raw otherwise (flagged uncalibrated); the phone's own day as-is
+    /// — and the day records the HIGHEST candidate (worn wins a tie, being the on-body count).
+    ///
+    /// HOLD-HIGHER (2026-07-03 incident, AAPS ecec9075b5): the old per-day cascade (scaled-worn →
+    /// phone's own day → raw-worn) could DISCARD a watch's full-day count in favour of a lower value:
+    /// on 2026-07-02 the watch counted 6224 by 23:57 but the day was recorded as the pocketed phone's
+    /// 2227 (creeping to 3095 as HealthKit synced more phone data) because the worn count could not
+    /// yet be calibrated and the cascade preferred the phone's own day over raw-worn. The shadow then
+    /// read "0.5× baseline / inactivity −6.6% ISF" off an undercount. Undercount is the UNSAFE
+    /// direction (false inactivity → would-LOWER ISF → more insulin), while an uncalibrated raw-worn
+    /// overcount only errs toward "activity" (would-RAISE ISF, less insulin) — so a completed day
+    /// holds the MAX of all sources' counts, never a lower later value.
     ///
     /// No watch-to-watch calibration is ever needed, so a future swap can never re-open the gap.
     public static func phoneAnchoredWindow(
@@ -360,41 +379,59 @@ public enum ActivityLoadTracker {
             .filter { $0.key != StepSourceResolver.iphone }
             .sorted { StepSourceResolver.tier($0.key) < StepSourceResolver.tier($1.key) }
 
+        // One source's count for one day: `steps` is phone-units when `calibrated`, raw otherwise.
+        struct Candidate { let source: String
+            let steps: Int
+            let calibrated: Bool }
+
         var out: [Int: DailyStepTotal] = [:]
         var cals: [String: Double?] = [:] // phone/donor scale, memoised
         var donorsUsed: [String] = []
         var anyUncalibrated = false
+        var heldNote: String?
 
         for day in (todayIndex - windowDays) ..< todayIndex {
-            let phoneDay = phoneDays[day]
-            // highest-trust worn source that recorded this day (whether or not it scales)
-            let worn = donors.first { $0.value.steps(forDay: day) != nil }
-            if let worn {
-                let raw = worn.value.steps(forDay: day)!
+            // All sources' counts for this day (phone units where a calibration exists, else raw).
+            var cands: [Candidate] = []
+            if let phoneDay = phoneDays[day] {
+                cands.append(Candidate(source: StepSourceResolver.iphone, steps: phoneDay.steps, calibrated: true))
+            }
+            for donor in donors {
+                guard let raw = donor.value.steps(forDay: day) else { continue }
                 let cal: Double?
-                if cals.keys.contains(worn.key) {
-                    cal = cals[worn.key]!
+                if cals.keys.contains(donor.key) {
+                    cal = cals[donor.key]!
                 } else {
-                    cal = calibration(active: phone, donor: worn.value) // median(phone/worn)
-                    cals[worn.key] = cal
+                    cal = calibration(active: phone, donor: donor.value) // median(phone/donor)
+                    cals[donor.key] = cal
                 }
                 if let cal {
-                    out[day] = DailyStepTotal(dayIndex: day, steps: Int(Double(raw) * cal), source: worn.key)
-                    if !donorsUsed.contains(worn.key) { donorsUsed.append(worn.key) }
-                } else if let phoneDay {
-                    out[day] = phoneDay // can't scale → phone's own day
+                    cands.append(Candidate(source: donor.key, steps: Int(Double(raw) * cal), calibrated: true))
                 } else {
-                    out[day] = DailyStepTotal(dayIndex: day, steps: raw, source: worn.key)
-                    if !donorsUsed.contains(worn.key) { donorsUsed.append(worn.key) }
-                    anyUncalibrated = true
+                    cands.append(Candidate(source: donor.key, steps: raw, calibrated: false))
                 }
-            } else if let phoneDay {
-                out[day] = phoneDay
+            }
+            guard !cands.isEmpty else { continue }
+            // Hold-higher: highest count wins; on a tie the worn (lower-tier) source names the day.
+            let winner = cands.max {
+                ($0.steps, -StepSourceResolver.tier($0.source)) < ($1.steps, -StepSourceResolver.tier($1.source))
+            }!
+            out[day] = DailyStepTotal(dayIndex: day, steps: winner.steps, source: winner.source)
+            if winner.source != StepSourceResolver.iphone {
+                if !donorsUsed.contains(winner.source) { donorsUsed.append(winner.source) }
+                if !winner.calibrated { anyUncalibrated = true }
+            }
+            // Breadcrumb for YESTERDAY (the day shadowFactors keys on): what was held over what.
+            if day == todayIndex - 1 {
+                let runnerUp = cands.filter { $0.source != winner.source }.max { $0.steps < $1.steps }
+                if let runnerUp, winner.steps > runnerUp.steps {
+                    heldNote = "held \(winner.source) \(winner.steps) over \(runnerUp.source) \(runnerUp.steps)"
+                }
             }
         }
 
         let hist = StepHistory(days: out.values.sorted { $0.dayIndex < $1.dayIndex })
-        return BridgeResult(history: hist, calibrated: !anyUncalibrated, donorsUsed: donorsUsed)
+        return BridgeResult(history: hist, calibrated: !anyUncalibrated, donorsUsed: donorsUsed, heldNote: heldNote)
     }
 
     /// Express `steps` reported by `activeSource` in PHONE-equivalent units, so today's live count

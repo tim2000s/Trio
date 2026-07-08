@@ -68,6 +68,31 @@ public enum SleepStateConstants {
     public static let minutesPerDay = 1440
     /// ms per minute, for hysteresis hold computation.
     public static let msPerMinute = 60000.0
+
+    // ── Lump-tolerant genuine-wake constants (2026-07-03 incident, AAPS 5f7a481f28) ──
+
+    /// Trailing lookback (minutes) over which cumulative stepsToday growth counts as wake evidence.
+    /// Wear-bridge steps arrive in batches that predate/straddle any single 15-min bucket (0 → 1326
+    /// by 06:02 on 2026-07-03), so the wake test compares stepsToday deltas across a longer window
+    /// instead of one bucket. (Kotlin: `WAKE_STEP_LOOKBACK_MIN = 60`)
+    public static let wakeStepLookbackMin = 60
+    /// Cumulative stepsToday growth over `wakeStepLookbackMin` required as step evidence for a
+    /// genuine wake — must clear nocturnal fidgeting over the full lookback. (Kotlin: `WAKE_STEP_THRESHOLD = 100`)
+    public static let wakeStepThreshold = 100
+    /// Consecutive cycles with avgHr above the wake floor before wake candidacy may start; a single
+    /// elevated sample never counts (REM lifts HR without wakefulness). (Kotlin: `WAKE_HR_SUSTAIN_CYCLES = 2`)
+    public static let wakeHrSustainCycles = 2
+}
+
+/// One (timestamp, cumulative stepsToday) observation for the trailing wake-evidence window
+/// (2026-07-03, AAPS 5f7a481f28).
+public struct SleepStepSample: Codable, Equatable, Sendable {
+    public var tMs: Double
+    public var steps: Int
+    public init(tMs: Double, steps: Int) {
+        self.tMs = tMs
+        self.steps = steps
+    }
 }
 
 /// Persisted state carried across cycles. Mirrors the Kotlin `State` serialized fields.
@@ -91,6 +116,13 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
     /// to the host within the same cycle, so the learner trains only on genuine wakes (not the
     /// hard exit, which would otherwise feed its own learned wake → the night-window collapse).
     public var wakeReason: String?
+    /// 2026-07-03 lump-tolerant wake evidence (AAPS 5f7a481f28): trailing (timestamp, stepsToday)
+    /// samples over the last `wakeStepLookbackMin` (+1 anchor just older, so the first in-window
+    /// increment counts). Persisted; a legacy blob without it decodes to [].
+    public var stepSamples: [SleepStepSample]
+    /// Count of consecutive cycles with avgHr above the wake floor; any miss (null or low) resets it.
+    /// Persisted; a legacy blob without it decodes to 0.
+    public var hrHighStreak: Int
 
     public init(
         state: SleepState = .awake,
@@ -99,7 +131,9 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         enteredAtMs: Double = 0,
         lastFreshHrSampleMs: Double = 0,
         sleepEntryReason: String? = nil,
-        wakeReason: String? = nil
+        wakeReason: String? = nil,
+        stepSamples: [SleepStepSample] = [],
+        hrHighStreak: Int = 0
     ) {
         self.state = state
         self.sleepCandidateSinceMs = sleepCandidateSinceMs
@@ -108,6 +142,8 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         self.lastFreshHrSampleMs = lastFreshHrSampleMs
         self.sleepEntryReason = sleepEntryReason
         self.wakeReason = wakeReason
+        self.stepSamples = stepSamples
+        self.hrHighStreak = hrHighStreak
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -117,6 +153,8 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         case enteredAtMs
         case lastFreshHrSampleMs
         case sleepEntryReason
+        case stepSamples
+        case hrHighStreak
     }
 
     // Custom decode so a snapshot persisted before the 2026-06 drought fields existed still
@@ -131,6 +169,8 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         lastFreshHrSampleMs = try c.decodeIfPresent(Double.self, forKey: .lastFreshHrSampleMs) ?? 0
         sleepEntryReason = try c.decodeIfPresent(String.self, forKey: .sleepEntryReason)
         wakeReason = nil // transient — never persisted/decoded
+        stepSamples = try c.decodeIfPresent([SleepStepSample].self, forKey: .stepSamples) ?? []
+        hrHighStreak = try c.decodeIfPresent(Int.self, forKey: .hrHighStreak) ?? 0
     }
 }
 
@@ -167,6 +207,11 @@ public struct SleepDetectorInputs {
     public var nowMs: Double
     /// Whether automatic sleep detection is enabled (gates only downstream night-mode, not `step`).
     public var autoBySleep: Bool
+    /// Today's CUMULATIVE steps from the best available source (max of wear-reconstructed and phone;
+    /// resets at local midnight). Feeds the lump-tolerant trailing wake-evidence window (2026-07-03,
+    /// AAPS 5f7a481f28) — the wear bridge delivers steps in batches invisible to the phone-bucket
+    /// `steps15min`. -1 = unavailable (legacy 15-min-bucket wake evidence only).
+    public var stepsToday: Int
 
     public init(
         hrReadings: [SleepHrReading],
@@ -183,7 +228,8 @@ public struct SleepDetectorInputs {
         freshHrWindowMin: Int = 10,
         mlMealLikely: Double?,
         nowMs: Double,
-        autoBySleep: Bool
+        autoBySleep: Bool,
+        stepsToday: Int = -1
     ) {
         self.hrReadings = hrReadings
         self.hrWindowMinutes = hrWindowMinutes
@@ -200,6 +246,7 @@ public struct SleepDetectorInputs {
         self.mlMealLikely = mlMealLikely
         self.nowMs = nowMs
         self.autoBySleep = autoBySleep
+        self.stepsToday = stepsToday
     }
 }
 
@@ -238,6 +285,17 @@ public enum SleepStateDetector {
         let fifteenMinCutoff = inputs.nowMs - 15 * C.msPerMinute
         let freshSamplesInLast15Min = freshReadings.filter { $0.timestampMs >= fifteenMinCutoff }.count
 
+        // 2026-07-03 lump-tolerant wake evidence (AAPS 5f7a481f28): record (nowMs, stepsToday) each
+        // cycle and derive cumulative growth over the trailing lookback (sum of positive inter-sample
+        // increments, so the local-midnight stepsToday reset never yields false deltas). HR sustain
+        // streak: consecutive cycles with avgHr above the wake floor; any miss (nil or low) resets it.
+        // (`var newState = state` deep-copies stepSamples — Swift arrays are value types.)
+        if inputs.stepsToday >= 0 {
+            Self.recordStepSample(&newState.stepSamples, nowMs: inputs.nowMs, stepsToday: inputs.stepsToday)
+        }
+        let stepsInLookback = Self.stepGrowth(newState.stepSamples, nowMs: inputs.nowMs, lookbackMin: C.wakeStepLookbackMin)
+        newState.hrHighStreak = (avgHr != nil && avgHr! > wakeFloor) ? newState.hrHighStreak + 1 : 0
+
         // Drought-qualified candidacy: no HR + established drought + step/meal gates pass.
         let droughtQualifies = avgHr == nil && droughtEstablished &&
             inputs.steps15min < C.sleepStepCeiling &&
@@ -268,7 +326,8 @@ public enum SleepStateDetector {
                         newState = SleepDetectorState(
                             state: .sleeping, enteredAtMs: inputs.nowMs,
                             lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                            sleepEntryReason: hrQualifies ? "hr" : "drought"
+                            sleepEntryReason: hrQualifies ? "hr" : "drought",
+                            stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                         )
                         transitioned = true
                     }
@@ -280,7 +339,8 @@ public enum SleepStateDetector {
             if !transitioned, inPreSleep {
                 newState = SleepDetectorState(
                     state: .preSleep, enteredAtMs: inputs.nowMs,
-                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs
+                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
+                    stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                 )
                 transitioned = true
             }
@@ -290,7 +350,8 @@ public enum SleepStateDetector {
             if !inOuterWindow, !inPreSleep {
                 newState = SleepDetectorState(
                     state: .awake, enteredAtMs: inputs.nowMs,
-                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs
+                    lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
+                    stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                 )
                 transitioned = true
             } else if anyQualifies {
@@ -302,7 +363,8 @@ public enum SleepStateDetector {
                         newState = SleepDetectorState(
                             state: .sleeping, enteredAtMs: inputs.nowMs,
                             lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                            sleepEntryReason: hrQualifies ? "hr" : "drought"
+                            sleepEntryReason: hrQualifies ? "hr" : "drought",
+                            stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                         )
                         transitioned = true
                     }
@@ -317,7 +379,8 @@ public enum SleepStateDetector {
                 newState = SleepDetectorState(
                     state: .awake, enteredAtMs: inputs.nowMs,
                     lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                    wakeReason: "boundary" // NOT a genuine wake — excluded from learning
+                    wakeReason: "boundary", // NOT a genuine wake — excluded from learning
+                    stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                 )
                 transitioned = true
             } else if transmissionResumeWake {
@@ -325,13 +388,19 @@ public enum SleepStateDetector {
                 newState = SleepDetectorState(
                     state: .awake, enteredAtMs: inputs.nowMs,
                     lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                    wakeReason: "resume" // genuine wake signal
+                    wakeReason: "resume", // genuine wake signal
+                    stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                 )
                 transitioned = true
             } else {
                 // Wake requires BOTH steps AND HR — BG trend alone is not sufficient.
-                let stepsConfirmWake = inputs.steps15min >= C.wakeStepFloor
-                let hrAboveWakeFloor = avgHr != nil && avgHr! > wakeFloor
+                // 2026-07-03 (AAPS 5f7a481f28): step evidence is lump-tolerant (cumulative stepsToday
+                // growth over the trailing lookback, OR the legacy 15-min phone bucket) and HR
+                // evidence is SUSTAINED (≥ wakeHrSustainCycles consecutive cycles above the wake
+                // floor, never a single sample — REM lifts HR).
+                let stepsConfirmWake = inputs.steps15min >= C.wakeStepFloor || stepsInLookback >= C.wakeStepThreshold
+                let hrAboveWakeFloor = avgHr != nil && avgHr! > wakeFloor &&
+                    newState.hrHighStreak >= C.wakeHrSustainCycles
                 if stepsConfirmWake, hrAboveWakeFloor {
                     if newState.wakeCandidateSinceMs == nil {
                         newState.wakeCandidateSinceMs = inputs.nowMs
@@ -341,7 +410,8 @@ public enum SleepStateDetector {
                             newState = SleepDetectorState(
                                 state: .awake, enteredAtMs: inputs.nowMs,
                                 lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                                wakeReason: "hr_steps" // genuine wake signal
+                                wakeReason: "hr_steps", // genuine wake signal
+                                stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                             )
                             transitioned = true
                         }
@@ -354,6 +424,28 @@ public enum SleepStateDetector {
 
         _ = transitioned
         return newState
+    }
+
+    /// Append the current cumulative-stepsToday observation and prune samples older than
+    /// `wakeStepLookbackMin`, keeping ONE just-older anchor so the first in-window increment still
+    /// counts. Bounded to ~lookback/cycle-interval entries. (AAPS `recordStepSample`, 5f7a481f28.)
+    static func recordStepSample(_ samples: inout [SleepStepSample], nowMs: Double, stepsToday: Int) {
+        samples.append(SleepStepSample(tMs: nowMs, steps: stepsToday))
+        let cutoff = nowMs - Double(SleepStateConstants.wakeStepLookbackMin) * SleepStateConstants.msPerMinute
+        while samples.count >= 2, samples[1].tMs <= cutoff { samples.removeFirst() }
+    }
+
+    /// Cumulative POSITIVE stepsToday growth across the trailing `lookbackMin`: sum of positive
+    /// increments between consecutive samples ending inside the window. Negative jumps (the local-
+    /// midnight stepsToday reset, a step-source switch) contribute 0 — not movement. (AAPS `stepGrowth`.)
+    static func stepGrowth(_ samples: [SleepStepSample], nowMs: Double, lookbackMin: Int) -> Int {
+        let cutoff = nowMs - Double(lookbackMin) * SleepStateConstants.msPerMinute
+        var sum = 0
+        for i in 1 ..< max(1, samples.count) {
+            if samples[i].tMs <= cutoff { continue }
+            sum += max(0, samples[i].steps - samples[i - 1].steps)
+        }
+        return sum
     }
 
     /// Duration-weighted average HR over the window; nil if no readings or zero total duration.
