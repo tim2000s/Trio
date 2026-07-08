@@ -66,6 +66,29 @@ final class ComposedFloorTests: XCTestCase {
         XCTAssertEqual(target(state: .recovering, v1WouldDoseU: 1.0)!, 0.125, accuracy: 1E-12)
     }
 
+    // MARK: hypo-gate (AAPS 9110ef2520 + 8b492a08e7) — TBR<63<2.0% AND TBR<70<3.5%, fail-closed
+
+    func testFloorAllowedWhenBothTbrUnderTheirLimits() {
+        XCTAssertTrue(ComposedFloor.allowedByTbr(tbr63Pct: 1.5, tbr70Pct: 3.0))
+    }
+
+    func testFloorBlockedWhenTbr63AtOrOverLimit() {
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: 2.0, tbr70Pct: 3.0)) // strict < → 2.0 blocked
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: 2.5, tbr70Pct: 3.0))
+    }
+
+    func testFloorBlockedWhenTbr70AtOrOverLimit_userCClass() {
+        // user C: <63 1.56% (under) but <70 3.95% (over the 3.5% two-test bar) → blocked.
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: 1.56, tbr70Pct: 3.95))
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: 1.5, tbr70Pct: 3.5)) // strict < → 3.5 blocked
+    }
+
+    func testFloorFailsClosedOnNilTbr() {
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: nil, tbr70Pct: 3.0)) // no <63 evidence
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: 1.5, tbr70Pct: nil)) // no <70 evidence
+        XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: nil, tbr70Pct: nil))
+    }
+
     // MARK: decide() — shadow vs active integration
 
     /// COMMITTED, floor conditions met, decelerating + low velocity so the composed pipeline dose is
