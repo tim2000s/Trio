@@ -1197,6 +1197,7 @@ final class BaseAPSManager: APSManager, Injectable {
             let resolutions = BoostV5AutoConfigApply.applyAutoConfig(
                 suggestion: s,
                 tbrBelow70Pct: tbr70,
+                timeBelow54Pct: sev54,
                 isResolved: resolved,
                 storedValue: { Self.boostKnobValue($0, prefs) },
                 currentDefault: { Self.boostKnobValue($0, stock) },
@@ -1241,9 +1242,18 @@ final class BaseAPSManager: APSManager, Injectable {
             // router.alertMessage). Announcing "configured" while changing nothing would be the
             // confusing behaviour the AAPS banner logic avoids.
             let heldSuggestions = resolutions.filter { $0.outcome == .suggestedNotAppliedTbr }
-                .map {
-                    "\($0.knob.rawValue): suggested \($0.suggestedValue) U from your history — not auto-applied " +
-                        "because time-below-70 is \((tbr70 * 10).rounded() / 10)%; set manually if desired"
+                .map { r -> String in
+                    // Name whichever guard(s) actually tripped (<70 raise-guard and/or the
+                    // 2026-07-07 <54 severe co-guard) so the user sees why the raise was held.
+                    var why: [String] = []
+                    if tbr70 > BoostV5AutoConfigApply.tbrRaiseGuardPct {
+                        why.append("time-below-70 is \((tbr70 * 10).rounded() / 10)%")
+                    }
+                    if sev54 >= BoostV5AutoConfigApply.tbr54RaiseGuardPct {
+                        why.append("time-below-54 is \((sev54 * 10).rounded() / 10)%")
+                    }
+                    return "\(r.knob.rawValue): suggested \(r.suggestedValue) U from your history — not auto-applied " +
+                        "because \(why.joined(separator: " and ")); set manually if desired"
                 }
             if !applied.isEmpty || !heldSuggestions.isEmpty {
                 let pretty = (applied + heldSuggestions).map { "• \($0)" }.joined(separator: "\n")

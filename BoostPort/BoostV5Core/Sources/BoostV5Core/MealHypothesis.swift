@@ -54,6 +54,34 @@ public enum MealHypothesisConstants {
     /// fraction of confirmedCapU so a manual committedCap ≥ confirmedCap can't make the gate
     /// unsatisfiable (which would silently disable V6's meal response). See BoostV5Engine.decide().
     public static let confirmDoseFloorMaxFracOfConfirmedCap = 0.8
+
+    /// 2026-07-06 confirm-floor pin (AAPS 311703ddf5): the committedCapU term of the confirm dose
+    /// floor is pinned at the FACTORY default COMMITTED cap (0.5 U — the `boostV5CommittedCapU`
+    /// preference default), regardless of the live preference value.
+    ///
+    /// The floor's job is "the commit-shot must beat one ROUTINE hold". A user-RAISED committedCap
+    /// describes a bigger PERMITTED hold, not a bigger routine one — so it must not move the floor.
+    /// Without the pin, raising committedCap silently TIGHTENS the confirm gate: the 2026-07-06
+    /// backtest on live telemetry showed a 0.5 → 1.0 cap raise would newly block ~18% of confirms
+    /// (prospective shots ≤ 1.0 U) — exactly the mid-meal starvation the gate exists to prevent.
+    /// A user-LOWERED committedCap still lowers the floor (min semantics preserved — see
+    /// `confirmDoseFloorU`).
+    public static let confirmFloorCommittedTermMax = 0.5
+
+    /// The OBSERVING→CONFIRMED dose-adequacy floor (U):
+    /// `min(min(committedCapU, confirmFloorCommittedTermMax), 0.8 × confirmedCapU)`.
+    ///
+    /// The committedCap term is pinned at the factory default (`confirmFloorCommittedTermMax`) so
+    /// raising the COMMITTED cap can't tighten the confirm gate (2026-07-06 — see the pin doc);
+    /// lowering it below the pin still lowers the floor. The confirmedCap clamp
+    /// (`confirmDoseFloorMaxFracOfConfirmedCap`, 2026-07-02) keeps the gate satisfiable.
+    public static func confirmDoseFloorU(committedCapU: Double, confirmedCapU: Double) -> Double {
+        min(
+            min(committedCapU, confirmFloorCommittedTermMax),
+            confirmDoseFloorMaxFracOfConfirmedCap * confirmedCapU
+        )
+    }
+
     public static let fallBackToIdleScore = 0.36
     public static let fallBackToIdleAge = 2
     public static let confirmedToCommittedAge = 0

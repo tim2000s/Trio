@@ -175,6 +175,15 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
 
         let nowMinute = Calendar.current.component(.hour, from: now) * 60
             + Calendar.current.component(.minute, from: now)
+        // Per-source step history + today's cumulative counts. Fetched here (ahead of the sleep
+        // detector) so the lump-tolerant genuine-wake evidence (2026-07-03, AAPS 5f7a481f28) can see
+        // today's cumulative steps; also reused by the activity-load section below.
+        let (multi, todayBySource, todayIndex) = await fetchStepsBySource(
+            days: ActivityLoadTracker.Const.windowDays, now: now
+        )
+        // stepsToday = highest cumulative today count across all sources (AAPS: max(wear, phone)) —
+        // -1 when no source reported, so the detector falls back to the legacy 15-min bucket.
+        let stepsTodayCumulative = todayBySource.values.max() ?? -1
         let sleep = SleepStateDetector.step(
             SleepDetectorInputs(
                 hrReadings: hrReadings,
@@ -189,7 +198,8 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
                 wakeHrHysteresisMin: 5,
                 mlMealLikely: nil,
                 nowMs: nowMs,
-                autoBySleep: prefs.boostNightModeAutoBySleep
+                autoBySleep: prefs.boostNightModeAutoBySleep,
+                stepsToday: stepsTodayCumulative
             ),
             prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
         )
@@ -236,9 +246,7 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         // 4) Activity-load source abstraction (SHADOW): pick the active step source across ALL
         // HealthKit writers (Apple Watch > Garmin > other > iPhone), build the per-source history,
         // and compute the bridged baseline + would-ΔISF. Telemetry only — not applied to dosing.
-        let (multi, todayBySource, todayIndex) = await fetchStepsBySource(
-            days: ActivityLoadTracker.Const.windowDays, now: now
-        )
+        // (multi/todayBySource/todayIndex fetched above, ahead of the sleep detector.)
         let freshSources = await freshStepSources(minutes: 20, now: now)
         let candidateSources = Set(multi.sources.keys).union(todayBySource.keys)
         let states = candidateSources.map { src in

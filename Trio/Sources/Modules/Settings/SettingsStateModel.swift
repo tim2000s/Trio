@@ -27,6 +27,7 @@ extension Settings {
         @Published var boostV5CommittedCapU: Decimal = 0.5
         @Published var boostCumulativeSmbCap60Min: Decimal = 10.0
         @Published var boostV5FastCarbConfirm: Bool = true
+        @Published var boostV5ComposedFloorActive: Bool = false
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
         @Published var boostDynIsfNormalTarget: Decimal = 99
@@ -95,6 +96,8 @@ extension Settings {
             subscribePreferencesSetting(\.boostCumulativeSmbCap60Min, on: $boostCumulativeSmbCap60Min) {
                 boostCumulativeSmbCap60Min = $0 }
             subscribePreferencesSetting(\.boostV5FastCarbConfirm, on: $boostV5FastCarbConfirm) { boostV5FastCarbConfirm = $0 }
+            subscribePreferencesSetting(\.boostV5ComposedFloorActive, on: $boostV5ComposedFloorActive) {
+                boostV5ComposedFloorActive = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
             subscribePreferencesSetting(\.boostDynIsfNormalTarget, on: $boostDynIsfNormalTarget) { boostDynIsfNormalTarget = $0 }

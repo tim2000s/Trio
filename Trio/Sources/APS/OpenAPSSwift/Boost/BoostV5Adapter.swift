@@ -54,6 +54,9 @@ enum BoostV5Adapter {
         var confirmedCapU: Double = 2.5 // fallback; host normally passes preferences.boostV5ConfirmedCapU
         var committedCapU: Double = 0.5 // fallback; host normally passes preferences.boostV5CommittedCapU
         var fastCarbConfirm: Bool = true
+        // 2026-07 composed brake-floor toggle (boostV5ComposedFloorActive). Per-user activation,
+        // default OFF — see ComposedFloor. Only takes effect when mode == .active (V6 the doser).
+        var composedFloorActive: Bool = false
     }
 
     static func run(
@@ -214,13 +217,25 @@ enum BoostV5Adapter {
                 recentLowBg: recentLowBg(glucose, now: clock),
                 cumulativeRise30min: max(0.0, shortAvg * 6.0),
                 hour: hour,
-                // AAPS parity: V5 ignores exercise/post-exercise (v5_exerciseActive/v5_inPostExerciseWindow
-                // are hardcoded false in AAPS — the deferred "V0" stubs). The observed flags are still
-                // logged in the reason tag for shadow analysis; the exercise feature gets switched on
-                // (here) once that analysis is in. `asleep` IS live in AAPS (sleepState == SLEEPING), so kept.
-                exerciseActive: false,
-                inPostExerciseWindow: false,
+                // 2026-07-07 (AAPS 2a9d096d8b F2): exercise inputs are now wired LIVE from the V1
+                // activity classifier — these were dead on the AAPS live path since the V6 plugin
+                // split, so V6's meal-score exercise damping (MealSignalScore.notExercisingTerm),
+                // the fastConfirm !exercising gate (MealHypothesisEngine.step), and the
+                // AggressionBudget post-exercise damper had never engaged. Trio's ActivityClassifier
+                // already derives these (surfaced via BoostActivityStore.flags), matching V3MLG3's
+                // state mapping. `asleep` was already live (sleepState == SLEEPING).
+                exerciseActive: activity.exerciseActive,
+                inPostExerciseWindow: activity.inPostExerciseWindow,
                 asleep: activity.asleep,
+                // 2026-07-06/07 composed brake-floor inputs (AAPS e0f18ddd0e + 730b3dcb2c). Computed
+                // here from the SAME sources the override seam uses: post-rescue = rolling 45-min CGM
+                // low < 75 (SafetyGateConstants.postRescueLowThresholdMgdl); v1WouldDose = the base
+                // determination's would-dose SMB (bounds the RECOVERING floor). The toggle only bites
+                // when V6 is the active doser.
+                postRescueWindow: Self.recentLowBg45Min(glucose, now: clock)
+                    < SafetyGateConstants.postRescueLowThresholdMgdl,
+                v1WouldDoseU: determination.units.map { ($0 as NSDecimalNumber).doubleValue },
+                composedFloorActive: mode == .active && knobs.composedFloorActive,
                 fastCarbConfirmEnabled: knobs.fastCarbConfirm,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,

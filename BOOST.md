@@ -148,10 +148,18 @@ The sleep detector is advanced on the loop cadence (not only on HealthKit callba
 
 **Intentionally different / deferred:**
 - **Activity‑load (festival) telemetry** — ported but **not wired** (shadow‑only logging; zero dosing effect). Deferred.
-- **Exercise / post‑exercise** modifiers — inputs are collected but not yet fed to the dose path; deferred pending shadow analysis.
+- **Exercise / post‑exercise** modifiers — **now wired live** (2026‑07, AAPS `2a9d096d8b`): `exerciseActive` / `inPostExerciseWindow` from the activity classifier feed the V6 meal‑score exercise damping, the fast‑confirm `!exercising` gate, and the AggressionBudget post‑exercise damper. (STRESS is never classified in Trio, matching AAPS dead‑code parity.)
+- **Composed Phase‑3 brake floor** (2026‑07, AAPS `e0f18ddd0e` + `730b3dcb2c`) — ported as the **default‑OFF** "Phase‑3 composed brake floor" Advanced toggle. When ON (and V6 is the active doser), floors the delivered dose at F=0.25 of the hypo‑damped budget on meal‑session high cycles, so the multiplicative brake stack (median 0.037) can't round a mid‑meal dose to zero. Per‑user only — enable only where trailing‑14d TBR<70 < 3.5% AND TBR<54 < 0.8%. Toggle OFF is bit‑identical to before.
 - **Flat‑CGM (`sensorQualityOk`) gate** — AndroidAPS only ever engages this for Libre 1; Trio's glucose layer carries no sensor‑type, so it is inert (matches non‑Libre‑1 behaviour).
 - **Boost time‑window, Use‑TDD + Adjust‑Sensitivity, TT‑sensitivity** — present in AndroidAPS but **disabled** in the reference build, so they are not ported (Trio matches at defaults). `future_sens` therefore runs as always‑in‑window.
 - **TDD blend** — Trio uses its single blended TDD; the AndroidAPS weighted‑8h pull‑down blend is not reproduced.
+
+**Consciously N/A (AndroidAPS‑platform‑specific or NS‑telemetry‑only — no Trio dosing analog):**
+- **Step‑source availability guard** (`fb3312a1e1`, F1/F9) — keys on Android `TYPE_STEP_COUNTER previousStepCount == -1` (hardware sensor dark since boot); Trio reads HealthKit (no such state). The behavioral intent — don't assert a lie‑in on absent step data — is already covered: `BoostV5Adapter.sleepInActive` requires a fresh (≤30 min) snapshot. The INACTIVE‑branch guard affects only the classifier's `profilePercent`, which Trio never wires to dosing (shadow telemetry).
+- **Intraday step banking** (`606c311d56`) — guards an Android in‑memory phone‑counter that can reset before local midnight; HealthKit stores absolute per‑source samples that are stable once a day closes, so there is no resettable counter to bank. Its intent (a completed day is never revised *down*) is covered by the hold‑higher `merge` (revise‑up‑only) ported from `ecec9075b5`.
+- **HR pipeline hardening** (`729788d733`, F4/F5/F6) — the wear watchdog re‑registers an Android `Sensor.TYPE_HEART_RATE` listener (N/A; Trio HR is HealthKit‑managed); the HR‑feed dark tracker, step‑feed‑edge breadcrumb, 5‑min HR max/min, and minGuardBG source attribution are NS RT / diagnostic telemetry, which the port defers by policy (reason‑tag design, not per‑field NS RT emission). No dosing effect.
+- **Pure NS `boostV5_*` RT fields** (`6067ec9a6d`, `2554b7f963`, `e0f18ddd0e` shadow field) — the underlying *behaviors* (confirm‑gate refactor, cumulative‑cap enforcement, composed‑floor computation) are ported; only the every‑cycle NS RT visibility fields are not (Trio surfaces state via the compact reason tag).
+- **Simple Mode pref masking** (`4dba4d534b`) — Simple Mode is an AndroidAPS preference‑masking layer with no Trio equivalent.
 
 ## Testing
 
