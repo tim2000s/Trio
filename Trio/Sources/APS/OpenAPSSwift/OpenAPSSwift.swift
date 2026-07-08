@@ -169,7 +169,8 @@ struct OpenAPSSwift {
                         sensitivity: (preferences.boostV5Sensitivity as NSDecimalNumber).doubleValue,
                         confirmedCapU: (preferences.boostV5ConfirmedCapU as NSDecimalNumber).doubleValue,
                         committedCapU: (preferences.boostV5CommittedCapU as NSDecimalNumber).doubleValue,
-                        fastCarbConfirm: preferences.boostV5FastCarbConfirm
+                        fastCarbConfirm: preferences.boostV5FastCarbConfirm,
+                        composedFloorActive: preferences.boostV5ComposedFloorActive
                     ),
                     clock: clock,
                     recentSmbUnits60m: recentSmb60,
@@ -289,6 +290,19 @@ struct OpenAPSSwift {
                                 " V6 suppressed (cumulative SMB cap \(String(format: "%.2f", recentSmb60))U/\(String(format: "%.2f", cumulativeCap))U reached);"
                         } else if let age = lastBolusAgeMin, age > smbInterval {
                             det.units = boostDose
+                            // 2026-07 composed brake-floor breadcrumb (AAPS 730b3dcb2c): when the
+                            // toggle is ON, decision.floorWouldAdd carries the uplift the floor
+                            // actually APPLIED inside decide(). On a floored cycle the seam caps don't
+                            // bind (post-rescue is a floor pre-condition; RECOVERING is v1-bounded
+                            // inside the target), so decision.finalDose is the delivered truth. Log
+                            // the un-floored → floored dose so a floored cycle is auditable.
+                            let floorUplift = preferences.boostV5ComposedFloorActive
+                                ? (result.decision.floorWouldAdd ?? 0) : 0
+                            if floorUplift > 0 {
+                                det.reason += " brake-floor applied: " +
+                                    "\(String(format: "%.3f", result.decision.finalDose - floorUplift))→" +
+                                    "\(String(format: "%.3f", result.decision.finalDose)) U;"
+                            }
                             if postRescueCapped {
                                 det.reason += " V6 post-rescue-capped to V1 base " +
                                     "\(String(format: "%.3f", (v1WouldDose as NSDecimalNumber).doubleValue))U (from " +

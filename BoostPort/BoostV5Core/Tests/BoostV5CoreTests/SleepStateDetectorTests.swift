@@ -24,7 +24,8 @@ final class SleepStateDetectorTests: XCTestCase {
         freshHrWindowMin: Int = 10,
         mlMealLikely: Double? = nil,
         nowMs: Double,
-        autoBySleep: Bool = true
+        autoBySleep: Bool = true,
+        stepsToday: Int = -1
     ) -> SleepDetectorInputs {
         let readings = hrReadings ?? (
             avgHeartRate > 0
@@ -46,7 +47,8 @@ final class SleepStateDetectorTests: XCTestCase {
             freshHrWindowMin: freshHrWindowMin,
             mlMealLikely: mlMealLikely,
             nowMs: nowMs,
-            autoBySleep: autoBySleep
+            autoBySleep: autoBySleep,
+            stepsToday: stepsToday
         )
     }
 
@@ -169,19 +171,27 @@ final class SleepStateDetectorTests: XCTestCase {
     func testSleepingToAwakeOnHrPlusSteps() {
         var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
         // resting 60 → wakeFloor 75. HR 80 (> 75) and steps 120 (≥ 100), inside outer window (06:00 = 360).
+        // 2026-07-03 (5f7a481f28): HR must be SUSTAINED ≥ 2 cycles before wake candidacy can start
+        // (a single elevated sample is REM, not wakefulness).
         let t0 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 0)
         state = D.step(t0, state)
         XCTAssertEqual(state.state, .sleeping)
-        XCTAssertEqual(state.wakeCandidateSinceMs, 0)
+        XCTAssertNil(state.wakeCandidateSinceMs) // HR streak only 1 → not yet sustained
 
-        // 4m later — not yet past 5m wake hysteresis.
-        let t4 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 4 * minute)
-        state = D.step(t4, state)
+        // 2nd cycle: HR streak reaches 2 → wake candidacy starts.
+        let t1 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 1 * minute)
+        state = D.step(t1, state)
         XCTAssertEqual(state.state, .sleeping)
+        XCTAssertEqual(state.wakeCandidateSinceMs, 1 * minute)
 
-        // 5m later → AWAKE.
+        // 4m after candidacy — not yet past 5m wake hysteresis.
         let t5 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 5 * minute)
         state = D.step(t5, state)
+        XCTAssertEqual(state.state, .sleeping)
+
+        // 5m after candidacy (nowMs 6m) → AWAKE.
+        let t6 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 6 * minute)
+        state = D.step(t6, state)
         XCTAssertEqual(state.state, .awake)
     }
 
@@ -198,9 +208,11 @@ final class SleepStateDetectorTests: XCTestCase {
 
     func testWakeCandidateResetsWhenConditionDrops() {
         var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
-        let t0 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 0)
-        state = D.step(t0, state)
-        XCTAssertEqual(state.wakeCandidateSinceMs, 0)
+        // Two sustained-HR cycles to build the streak and start wake candidacy.
+        state = D.step(makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 0), state)
+        let t1 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 1 * minute)
+        state = D.step(t1, state)
+        XCTAssertEqual(state.wakeCandidateSinceMs, 1 * minute)
         // steps drop → candidate resets.
         let t2 = makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 2 * minute)
         state = D.step(t2, state)
@@ -287,15 +299,128 @@ final class SleepStateDetectorTests: XCTestCase {
     }
 
     func testGenuineWakeReasonIsHrSteps() {
-        // resting 60 → wakeFloor 75; HR 80 + steps 120 in window (06:00) sustained 5m → genuine wake.
+        // resting 60 → wakeFloor 75; HR 80 + steps 120 in window (06:00). HR must sustain ≥ 2 cycles
+        // before candidacy, then hold 5m → genuine wake.
         var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
         state = D.step(makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 0), state)
+        // 2nd cycle: streak reaches 2 → candidacy starts at 1m.
+        state = D.step(
+            makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 1 * minute),
+            state
+        )
         let out = D.step(
-            makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 5 * minute),
+            makeInputs(avgHeartRate: 80, restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 360, nowMs: 6 * minute),
             state
         )
         XCTAssertEqual(out.state, .awake)
         XCTAssertEqual(out.wakeReason, "hr_steps")
+    }
+
+    // MARK: lump-tolerant genuine-wake (2026-07-03, AAPS 5f7a481f28)
+
+    func testCumulativeStepLumpWithSustainedHrWakes() {
+        // The 2026-07-03 incident: phone 15-min bucket is 0 all night (nightstand), but the wear
+        // bridge delivers a cumulative stepsToday LUMP (0 → 1300). With sustained HR, that lump over
+        // the trailing lookback is genuine wake evidence even though steps15min never reaches 100.
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
+        // Cycle 1 (streak 1): stepsToday 0 baseline anchor, HR above floor.
+        state = D.step(
+            makeInputs(avgHeartRate: 82, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 0, stepsToday: 0),
+            state
+        )
+        XCTAssertNil(state.wakeCandidateSinceMs)
+        // Cycle 2 (streak 2): stepsToday jumps to 1300 (Δ 1300 ≥ 100 in lookback) → candidacy starts,
+        // driven purely by the cumulative lump (steps15min still 0).
+        state = D.step(
+            makeInputs(
+                avgHeartRate: 82,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 5 * minute,
+                stepsToday: 1300
+            ),
+            state
+        )
+        XCTAssertEqual(state.wakeCandidateSinceMs, 5 * minute)
+        // Held past 5m hysteresis → AWAKE (genuine wake).
+        let out = D.step(
+            makeInputs(
+                avgHeartRate: 82,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 10 * minute,
+                stepsToday: 1400
+            ),
+            state
+        )
+        XCTAssertEqual(out.state, .awake)
+        XCTAssertEqual(out.wakeReason, "hr_steps")
+    }
+
+    func testCumulativeLumpWithoutSustainedHrDoesNotWake() {
+        // A step lump but only ONE elevated-HR cycle (REM-like) → no wake candidacy.
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
+        state = D.step(
+            makeInputs(avgHeartRate: 55, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 0, stepsToday: 0),
+            state
+        )
+        // Single high-HR cycle with a big lump: streak only reaches 1 → HR not sustained → no candidacy.
+        let out = D.step(
+            makeInputs(
+                avgHeartRate: 90,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 5 * minute,
+                stepsToday: 1300
+            ),
+            state
+        )
+        XCTAssertNil(out.wakeCandidateSinceMs)
+        XCTAssertEqual(out.state, .sleeping)
+    }
+
+    func testRemHrRiseWithFlatStepsDoesNotWake() {
+        // Sustained HR but steps flat (REM) → no step evidence → no wake.
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
+        state = D.step(
+            makeInputs(avgHeartRate: 85, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 0, stepsToday: 500),
+            state
+        )
+        let out = D.step(
+            makeInputs(
+                avgHeartRate: 85,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 5 * minute,
+                stepsToday: 500
+            ),
+            state
+        )
+        XCTAssertNil(out.wakeCandidateSinceMs) // steps flat → stepsConfirmWake false
+        XCTAssertEqual(out.state, .sleeping)
+    }
+
+    func testMidnightStepResetIsNotWakeEvidence() {
+        // stepGrowth sums only POSITIVE increments, so the local-midnight stepsToday reset (a large
+        // negative jump) contributes 0 — a reset must never read as movement.
+        let samples = [
+            SleepStepSample(tMs: 0, steps: 8000),
+            SleepStepSample(tMs: 3 * minute, steps: 20) // midnight reset: 8000 → 20
+        ]
+        XCTAssertEqual(SleepStateDetector.stepGrowth(samples, nowMs: 3 * minute, lookbackMin: 60), 0)
+    }
+
+    func testStepGrowthSumsPositiveIncrementsInWindow() {
+        let samples = [
+            SleepStepSample(tMs: 0, steps: 100),
+            SleepStepSample(tMs: 20 * minute, steps: 250), // +150
+            SleepStepSample(tMs: 40 * minute, steps: 300) // +50
+        ]
+        XCTAssertEqual(SleepStateDetector.stepGrowth(samples, nowMs: 40 * minute, lookbackMin: 60), 200)
     }
 
     // MARK: serialization round-trip

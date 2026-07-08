@@ -65,6 +65,15 @@ public enum BoostV5AutoConfigApply {
     /// 4.0% is the international consensus TBR<70 target the derivation already uses.
     public static let tbrRaiseGuardPct = 4.0
 
+    /// Severe-hypo co-guard on the same raise-guard (2026-07-07, AAPS 13c9bc4d53): a dose-cap RAISE
+    /// is also held (suggested-not-applied) when 14-day time-below-54 is at or above this. 1.0% is
+    /// the international consensus <54 target the derivation already uses (`sev54Target`). Catches
+    /// the user-B pattern the <70-only guard missed: TBR<70 3.83% (under the 4.0% line) but <54
+    /// 1.01% (over the severe line) — severe exposure is the stronger contraindication for a raise,
+    /// and a user can sit under the <70 gate while over the <54 one. Same suggested-not-applied
+    /// path as `tbrRaiseGuardPct`; lowerings and non-cap tightenings still always apply.
+    public static let tbr54RaiseGuardPct = 1.0
+
     /// Every factory default each managed knob has EVER shipped with on Trio, beyond the current
     /// one. Verified from git history of Trio/Sources/Models/Preferences.swift (2026-07-06,
     /// `git log --all -p -G'var boost…'`):
@@ -126,7 +135,8 @@ public enum BoostV5AutoConfigApply {
     ///  - user-tuned (injected predicate: UserSet flag OR off every-era factory) → kept, marked
     ///    resolved (never revisited);
     ///  - a dose-cap (`doseCapKnobs`) whose derived value would RAISE the operative value while
-    ///    the 14-day TBR<70 exceeds `tbrRaiseGuardPct` → NOT written, marked resolved, returned as
+    ///    the 14-day TBR<70 exceeds `tbrRaiseGuardPct` OR the 14-day time-below-54 is ≥
+    ///    `tbr54RaiseGuardPct` → NOT written, marked resolved, returned as
     ///    `.suggestedNotAppliedTbr` so the caller can surface the suggestion;
     ///  - otherwise → suggested value written, marked resolved.
     ///
@@ -141,6 +151,7 @@ public enum BoostV5AutoConfigApply {
     public static func applyAutoConfig(
         suggestion: BoostV5AutoConfig.Suggestion,
         tbrBelow70Pct: Double,
+        timeBelow54Pct: Double = 0.0,
         isResolved: (BoostAutoConfigKnob) -> Bool,
         storedValue: (BoostAutoConfigKnob) -> Double?,
         currentDefault: (BoostAutoConfigKnob) -> Double,
@@ -150,6 +161,8 @@ public enum BoostV5AutoConfigApply {
     ) -> [Resolution] {
         var resolutions: [Resolution] = []
         var operative: [BoostAutoConfigKnob: Double] = [:]
+        // Raise-guard trigger: <70 over its line OR <54 at/over the consensus severe line (2026-07-07).
+        let raiseGuardTripped = tbrBelow70Pct > Self.tbrRaiseGuardPct || timeBelow54Pct >= Self.tbr54RaiseGuardPct
 
         func resolve(_ knob: BoostAutoConfigKnob, _ derived: Double) {
             let current = storedValue(knob) ?? currentDefault(knob)
@@ -166,13 +179,14 @@ public enum BoostV5AutoConfigApply {
                 ))
                 return
             }
-            if doseCapKnobs.contains(knob), derived > current + Self.defaultEps, tbrBelow70Pct > Self.tbrRaiseGuardPct {
+            if doseCapKnobs.contains(knob), derived > current + Self.defaultEps, raiseGuardTripped {
                 markResolved(knob) // suggestion surfaced, not written
                 operative[knob] = current
                 resolutions.append(Resolution(
                     knob: knob, outcome: .suggestedNotAppliedTbr, suggestedValue: derived, operativeValue: current,
                     reason: "suggested-not-applied (TBR): suggested=\(derived) current=\(current) " +
-                        "TBR<70=\(tbrBelow70Pct)% > \(Self.tbrRaiseGuardPct)%"
+                        "TBR<70=\(tbrBelow70Pct)% (guard >\(Self.tbrRaiseGuardPct)%) " +
+                        "<54=\(timeBelow54Pct)% (guard ≥\(Self.tbr54RaiseGuardPct)%)"
                 ))
                 return
             }

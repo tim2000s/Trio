@@ -117,6 +117,7 @@ struct FeatureSettingsView: BaseView {
                     state.markBoostCumulativeSmbCap60MinUserSet()
                 }
                 Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
+                Toggle("Phase-3 composed brake floor", isOn: $state.boostV5ComposedFloorActive)
             }
             .listRowBackground(Color.chart)
 

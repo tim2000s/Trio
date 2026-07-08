@@ -72,6 +72,12 @@ struct Preferences: JSON, Equatable {
     // conservative default would needlessly throttle before personalisation.
     var boostCumulativeSmbCap60Min: Decimal = 10.0 // 0…10 U
     var boostV5FastCarbConfirm: Bool = true
+    // 2026-07 composed Phase-3 brake-floor (AAPS 730b3dcb2c). Advanced, default OFF. When ON (and V6
+    // is the active doser), floors the delivered dose at F=0.25 of the hypo-damped budget on
+    // meal-session high cycles, preventing the multiplicative brake stack (median 0.037) from
+    // rounding mid-meal doses to zero. PER-USER only — enable only where trailing-14d TBR<70 < 3.5%
+    // AND TBR<54 < 0.8% (the same-day cohort re-review excluded TBR-heavy users). See ComposedFloor.
+    var boostV5ComposedFloorActive: Bool = false
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
     // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
@@ -198,6 +204,7 @@ extension Preferences {
         case boostV5CommittedCapU
         case boostCumulativeSmbCap60Min
         case boostV5FastCarbConfirm
+        case boostV5ComposedFloorActive
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
@@ -523,6 +530,9 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5FastCarbConfirm) {
             preferences.boostV5FastCarbConfirm = v
+        }
+        if let v = try? container.decode(Bool.self, forKey: .boostV5ComposedFloorActive) {
+            preferences.boostV5ComposedFloorActive = v
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v

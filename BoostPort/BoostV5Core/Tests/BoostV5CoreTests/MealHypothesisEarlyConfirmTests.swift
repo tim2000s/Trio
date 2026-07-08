@@ -109,4 +109,31 @@ final class MealHypothesisEarlyConfirmTests: XCTestCase {
             eventualBg: eventualBg, targetBg: targetBg, scoreReadyStreak: true
         ))
     }
+
+    // MARK: 2026-07-06 confirm-floor pin (AAPS 311703ddf5)
+
+    // The committedCap term is pinned at the factory default (confirmFloorCommittedTermMax = 0.5 U):
+    // the floor means "shot must beat one ROUTINE hold" — a user-RAISED committedCap is a bigger
+    // PERMITTED hold, not a bigger routine one. Backtest 2026-07-06: without the pin, a 0.5 → 1.0
+    // cap raise would newly block ~18% of live confirms.
+
+    func testConfirmFloorUnchangedAtFactoryCommittedCap() {
+        // 0.8 × confirmedCap (2.5) = 2.0 does not bind; committedCap term = min(0.5, pin 0.5) = 0.5.
+        XCTAssertEqual(C.confirmDoseFloorU(committedCapU: 0.5, confirmedCapU: 2.5), 0.5, accuracy: 1E-12)
+    }
+
+    func testRaisedCommittedCapDoesNotRaiseTheFloor() {
+        // A 0.5 → 1.0 cap raise: without the pin the floor would double to 1.0 and newly block every
+        // confirm shot ≤ 1.0 U. With the pin it stays at the factory 0.5.
+        XCTAssertEqual(C.confirmDoseFloorU(committedCapU: 1.0, confirmedCapU: 2.5), 0.5, accuracy: 1E-12)
+    }
+
+    func testLoweredCommittedCapStillLowersTheFloor() {
+        XCTAssertEqual(C.confirmDoseFloorU(committedCapU: 0.3, confirmedCapU: 2.5), 0.3, accuracy: 1E-12)
+    }
+
+    func testConfirmedCapClampStillBindsWhenSmallerThanPinnedTerm() {
+        // 0.8 × confirmedCap (0.5) = 0.4 < pinned committedCap term (0.5) → floor 0.4.
+        XCTAssertEqual(C.confirmDoseFloorU(committedCapU: 0.5, confirmedCapU: 0.5), 0.4, accuracy: 1E-12)
+    }
 }
