@@ -235,7 +235,12 @@ enum BoostV5Adapter {
                 postRescueWindow: Self.recentLowBg45Min(glucose, now: clock)
                     < SafetyGateConstants.postRescueLowThresholdMgdl,
                 v1WouldDoseU: determination.units.map { ($0 as NSDecimalNumber).doubleValue },
-                composedFloorActive: mode == .active && knobs.composedFloorActive,
+                // 2026-07-08 (AAPS 9110ef2520 + 8b492a08e7): the toggle is additionally gated on the
+                // ENFORCED per-user hypo-gate — trailing-14d TBR<63 < 2.0% AND TBR<70 < 3.5%,
+                // fail-closed (BoostComposedFloorGate, refreshed hourly by APSManager). The floor is
+                // insulin-adding, so it cannot engage for a hypo-prone user even if toggled on.
+                composedFloorActive: mode == .active && knobs.composedFloorActive
+                    && BoostComposedFloorGate.allowed,
                 fastCarbConfirmEnabled: knobs.fastCarbConfirm,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,

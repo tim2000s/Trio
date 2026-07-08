@@ -82,6 +82,24 @@ public enum SleepStateConstants {
     /// Consecutive cycles with avgHr above the wake floor before wake candidacy may start; a single
     /// elevated sample never counts (REM lifts HR without wakefulness). (Kotlin: `WAKE_HR_SUSTAIN_CYCLES = 2`)
     public static let wakeHrSustainCycles = 2
+
+    // ── Degraded-HR fallback + steps-alone wake (2026-07-08 incident, AAPS dea9d300ff) ──
+
+    /// Minimum FRESH HR samples within the fresh window for the feed to count as a reliable live
+    /// transmission. Below this the feed is UNRELIABLE — dead OR intermittent. A degraded feed of
+    /// ~1 stray sample per 15-20 min defeated both the old avgHr==nil drought gate (each stray reset
+    /// the drought clock) and the HR qualifier (avgHr flickered), leaving the detector stuck in
+    /// PRE_SLEEP three nights running. A feed below this floor is treated as drought, and stray
+    /// samples below it do NOT reset the drought clock. (Kotlin: `HR_RELIABLE_MIN_SAMPLES = 3`)
+    public static let hrReliableMinSamples = 3
+    /// Cumulative stepsToday growth over `wakeStepLookbackMin` that wakes on STEPS ALONE (no HR
+    /// corroboration), sustained — deliberately HIGH (clear getting-up movement, not a bathroom trip
+    /// or fidget; `wakeStepThreshold` is the lower HR-corroborated bar). (Kotlin: `WAKE_STEP_STRONG_THRESHOLD = 250`)
+    public static let wakeStepStrongThreshold = 250
+    /// ±tolerance (minutes) around the scheduled night window: sleep candidacy may begin up to this
+    /// long BEFORE nightStart, and the gentle HR+steps wake is trusted only within this long of
+    /// nightEnd (earlier genuine rising is caught by `wakeStepStrongThreshold`). (Kotlin: `SLEEP_SCHEDULE_TOLERANCE_MIN = 90`)
+    public static let sleepScheduleToleranceMin = 90
 }
 
 /// One (timestamp, cumulative stepsToday) observation for the trailing wake-evidence window
@@ -265,6 +283,15 @@ public enum SleepStateDetector {
         let inOuterWindow = minuteInWrappedRange(inputs.nowMinuteOfDay, inputs.nightStartMinute, inputs.nightEndMinute)
         let preSleepStart = (inputs.nightStartMinute - inputs.preSleepLeadMin + C.minutesPerDay) % C.minutesPerDay
         let inPreSleep = minuteInWrappedRange(inputs.nowMinuteOfDay, preSleepStart, inputs.nightStartMinute)
+        // 2026-07-08 (AAPS dea9d300ff): sleep candidacy is allowed ±sleepScheduleToleranceMin early
+        // (before nightStart) through nightEnd — an unusually-early onset up to 90 min pre-nightStart
+        // is detected promptly regardless of the (SMB-pre-warm) preSleepLead. And the gentle HR+steps
+        // wake is trusted only within sleepScheduleToleranceMin of nightEnd.
+        let sleepCandStart = (inputs.nightStartMinute - C.sleepScheduleToleranceMin + C.minutesPerDay) % C.minutesPerDay
+        let inSleepCandidateWindow = minuteInWrappedRange(inputs.nowMinuteOfDay, sleepCandStart, inputs.nightEndMinute)
+        let wakeGraceStart = (inputs.nightEndMinute - C.sleepScheduleToleranceMin + C.minutesPerDay) % C.minutesPerDay
+        let nearScheduledWake = minuteInWrappedRange(inputs.nowMinuteOfDay, wakeGraceStart, inputs.nightEndMinute)
+        _ = inOuterWindow // retained for readability; candidacy now keys on inSleepCandidateWindow
 
         var newState = state
 
@@ -275,15 +302,23 @@ public enum SleepStateDetector {
         let freshReadings = inputs.hrReadings
             .filter { $0.isValid && $0.timestampMs > freshCutoff && $0.timestampMs <= inputs.nowMs }
         let mostRecentFreshTs = freshReadings.map(\.timestampMs).max() ?? 0
-        if mostRecentFreshTs > newState.lastFreshHrSampleMs {
+        let fifteenMinCutoff = inputs.nowMs - 15 * C.msPerMinute
+        let freshSamplesInLast15Min = freshReadings.filter { $0.timestampMs >= fifteenMinCutoff }.count
+        // 2026-07-08 (AAPS dea9d300ff): only a RELIABLE live feed (≥ hrReliableMinSamples fresh)
+        // resets the drought clock. A lone stray sample every 15-20 min must NOT reset it — that
+        // intermittency is what kept droughtMinutes below threshold all night and left the detector
+        // stuck in PRE_SLEEP.
+        let hrTransmitting = freshSamplesInLast15Min >= C.hrReliableMinSamples
+        if mostRecentFreshTs > newState.lastFreshHrSampleMs, hrTransmitting {
             newState.lastFreshHrSampleMs = mostRecentFreshTs
         }
         let droughtMinutes = newState.lastFreshHrSampleMs > 0
             ? Int((inputs.nowMs - newState.lastFreshHrSampleMs) / C.msPerMinute)
             : Int.max
         let droughtEstablished = droughtMinutes >= inputs.droughtThresholdMin
-        let fifteenMinCutoff = inputs.nowMs - 15 * C.msPerMinute
-        let freshSamplesInLast15Min = freshReadings.filter { $0.timestampMs >= fifteenMinCutoff }.count
+        // The HR feed is UNRELIABLE (dead OR intermittent) when fewer than hrReliableMinSamples
+        // fresh samples landed in the last 15 min — this, not avgHr==nil, drives the drought fallback.
+        let hrUnreliable = freshSamplesInLast15Min < C.hrReliableMinSamples
 
         // 2026-07-03 lump-tolerant wake evidence (AAPS 5f7a481f28): record (nowMs, stepsToday) each
         // cycle and derive cumulative growth over the trailing lookback (sum of positive inter-sample
@@ -296,14 +331,20 @@ public enum SleepStateDetector {
         let stepsInLookback = Self.stepGrowth(newState.stepSamples, nowMs: inputs.nowMs, lookbackMin: C.wakeStepLookbackMin)
         newState.hrHighStreak = (avgHr != nil && avgHr! > wakeFloor) ? newState.hrHighStreak + 1 : 0
 
-        // Drought-qualified candidacy: no HR + established drought + step/meal gates pass.
-        let droughtQualifies = avgHr == nil && droughtEstablished &&
+        // Drought-qualified candidacy (2026-06-05 / 2026-07-08): HR feed UNRELIABLE (dead OR
+        // intermittent) + established drought + step/meal gates pass. Lets the detector reach SLEEPING
+        // on batched-HR platforms AND on a degraded feed dribbling one stray sample every 15-20 min
+        // (the old avgHr==nil gate never fired because the strays kept avgHr non-nil + reset drought).
+        let droughtQualifies = hrUnreliable && droughtEstablished &&
             inputs.steps15min < C.sleepStepCeiling &&
             (inputs.mlMealLikely == nil || inputs.mlMealLikely! < C.mealLikelyThreshold)
         let hrQualifies = qualifiesAsSleepCandidate(
             avgHr, sleepCap: sleepCap, steps15min: inputs.steps15min, mlMealLikely: inputs.mlMealLikely
         )
         let anyQualifies = hrQualifies || droughtQualifies
+        // 2026-07-08: three-way entry reason — "hr" (corroborated), "drought" (fully dead feed), or
+        // "time" (intermittent/degraded feed reaching SLEEPING on the clock via the drought fallback).
+        let sleepEntryReasonValue = hrQualifies ? "hr" : (avgHr == nil ? "drought" : "time")
 
         // Transmission-resume wake: a burst of fresh samples following an actual drought.
         let priorDroughtMinutes = state.lastFreshHrSampleMs > 0
@@ -316,8 +357,10 @@ public enum SleepStateDetector {
 
         switch state.state {
         case .awake:
-            // Sleep candidacy possible from AWAKE when in outer window OR in pre-sleep window.
-            if inOuterWindow || inPreSleep, anyQualifies {
+            // Sleep candidacy possible from AWAKE anywhere in the ±90-early candidate window (so an
+            // unusually-early onset up to sleepScheduleToleranceMin before nightStart is detected
+            // promptly, independent of the PRE_SLEEP SMB-pre-warm lead). (2026-07-08, AAPS dea9d300ff.)
+            if inSleepCandidateWindow, anyQualifies {
                 if newState.sleepCandidateSinceMs == nil {
                     newState.sleepCandidateSinceMs = inputs.nowMs
                 } else {
@@ -326,7 +369,7 @@ public enum SleepStateDetector {
                         newState = SleepDetectorState(
                             state: .sleeping, enteredAtMs: inputs.nowMs,
                             lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                            sleepEntryReason: hrQualifies ? "hr" : "drought",
+                            sleepEntryReason: sleepEntryReasonValue,
                             stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                         )
                         transitioned = true
@@ -363,7 +406,7 @@ public enum SleepStateDetector {
                         newState = SleepDetectorState(
                             state: .sleeping, enteredAtMs: inputs.nowMs,
                             lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                            sleepEntryReason: hrQualifies ? "hr" : "drought",
+                            sleepEntryReason: sleepEntryReasonValue,
                             stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                         )
                         transitioned = true
@@ -393,15 +436,24 @@ public enum SleepStateDetector {
                 )
                 transitioned = true
             } else {
-                // Wake requires BOTH steps AND HR — BG trend alone is not sufficient.
-                // 2026-07-03 (AAPS 5f7a481f28): step evidence is lump-tolerant (cumulative stepsToday
-                // growth over the trailing lookback, OR the legacy 15-min phone bucket) and HR
-                // evidence is SUSTAINED (≥ wakeHrSustainCycles consecutive cycles above the wake
-                // floor, never a single sample — REM lifts HR).
+                // Two wake rules (2026-07-08, AAPS dea9d300ff), both lump-tolerant + hysteresis-
+                // sustained; BG trend alone still NEVER wakes.
+                // Step evidence is lump-tolerant (cumulative stepsToday growth over the trailing
+                // lookback, OR the legacy 15-min phone bucket); HR evidence is SUSTAINED (≥
+                // wakeHrSustainCycles consecutive cycles above the wake floor — a single sample never
+                // counts, REM lifts HR).
                 let stepsConfirmWake = inputs.steps15min >= C.wakeStepFloor || stepsInLookback >= C.wakeStepThreshold
                 let hrAboveWakeFloor = avgHr != nil && avgHr! > wakeFloor &&
                     newState.hrHighStreak >= C.wakeHrSustainCycles
-                if stepsConfirmWake, hrAboveWakeFloor {
+                // Rule 1 (gentle): HR-rise + steps, trusted ONLY within sleepScheduleToleranceMin of
+                // scheduled wake (earlier HR rises are REM/restlessness) → reason "hr_steps".
+                let gentleWake = stepsConfirmWake && hrAboveWakeFloor && nearScheduledWake
+                // Rule 2 (strong steps-alone): clear sustained getting-up movement wakes WITHOUT HR,
+                // but ONLY when the feed is unreliable (drought established, can't corroborate). When
+                // HR is live the gentle rule governs and steps-alone must NOT wake (both-required
+                // guard preserved). Safety net for HR-death nights + the 2026-07-03 over-sleep lump.
+                let strongStepsWake = droughtEstablished && stepsInLookback >= C.wakeStepStrongThreshold
+                if gentleWake || strongStepsWake {
                     if newState.wakeCandidateSinceMs == nil {
                         newState.wakeCandidateSinceMs = inputs.nowMs
                     } else {
@@ -410,7 +462,7 @@ public enum SleepStateDetector {
                             newState = SleepDetectorState(
                                 state: .awake, enteredAtMs: inputs.nowMs,
                                 lastFreshHrSampleMs: newState.lastFreshHrSampleMs,
-                                wakeReason: "hr_steps", // genuine wake signal
+                                wakeReason: gentleWake ? "hr_steps" : "steps", // both genuine wakes
                                 stepSamples: newState.stepSamples, hrHighStreak: newState.hrHighStreak
                             )
                             transitioned = true

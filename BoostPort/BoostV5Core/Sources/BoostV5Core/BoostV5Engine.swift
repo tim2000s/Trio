@@ -331,8 +331,10 @@ public enum BoostV5Engine {
 /// added hypo exposure. SHADOW first: with the toggle OFF, `targetDose` only feeds the
 /// `floorWouldAdd` telemetry (what the floor WOULD have added) and delivered dosing is untouched.
 /// Activation (`boostV5ComposedFloorActive`, Advanced, default OFF) applies the floor to the
-/// delivered dose — PER-USER only, TBR-gated by guidance (enable only where trailing-14d TBR<70 <
-/// 3.5% AND TBR<54 < 0.8%).
+/// delivered dose — PER-USER, and the per-user TBR gate is now ENFORCED in code (2026-07-08, AAPS
+/// 9110ef2520 + 8b492a08e7): the floor may only engage while trailing-14d TBR<63 < 2.0% AND
+/// TBR<70 < 3.5% (`allowedByTbr`, fail-closed). The host computes those from a throttled 14d BG
+/// scan and ANDs the result into `V5Inputs.composedFloorActive`.
 enum ComposedFloor {
     /// Floor fraction of the (mlHypoRisk-damped) AggressionBudget the composed multiplier stack may
     /// not push the dose below on a meal-session high cycle.
@@ -341,6 +343,29 @@ enum ComposedFloor {
     static let minBgMgdl = 160.0
     /// eventualBG must exceed target by more than this (mg/dL).
     static let minEventualOffsetMgdl = 20.0
+
+    /// Max trailing-14-day time-below-63 mg/dL (3.5 mmol/L — the TING lower bound) for the composed
+    /// brake-floor to be ALLOWED to engage. The floor is insulin-ADDING, so it may only alter the
+    /// delivered dose for users with low severe-hypo exposure. (2026-07-08, AAPS 9110ef2520.)
+    static let maxTbr63Pct = 2.0
+    /// Max trailing-14-day time-below-70 mg/dL — the two-test-bar primary gate (added 2026-07-08,
+    /// AAPS 8b492a08e7: a <63-only gate wrongly engaged user C, whose <63 was 1.56% but <70 3.95%).
+    static let maxTbr70Pct = 3.5
+
+    /// Whether the composed brake-floor may engage, given the user's trailing-14d time-below-63 AND
+    /// time-below-70 mg/dL. FAIL-CLOSED: a nil in EITHER (not yet computed, or insufficient CGM
+    /// history to trust the fraction) means NOT allowed — an insulin-adding feature never engages
+    /// without evidence the user is not hypo-prone. Thresholds are strict (<), so a user exactly at
+    /// either limit is blocked. (2026-07-08, AAPS 9110ef2520 + 8b492a08e7.)
+    static func allowedByTbr(
+        tbr63Pct: Double?,
+        tbr70Pct: Double?,
+        max63: Double = maxTbr63Pct,
+        max70: Double = maxTbr70Pct
+    ) -> Bool {
+        guard let t63 = tbr63Pct, let t70 = tbr70Pct else { return false }
+        return t63 < max63 && t70 < max70
+    }
 
     /// The composed Phase-3 floor's target dose (U) for this cycle — the single source of truth for
     /// BOTH the shadow field (toggle OFF: `wouldAdd = max(0, target − actualFinalDose)`) and the
