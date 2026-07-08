@@ -106,12 +106,14 @@ public enum SleepHistoryTracker {
         let restingHr = restingHrSamples.count >= minSessionsForLearned ? median(restingHrSamples) : nil
         let daytimeHr = daytimeHrSamples.count >= minSessionsForLearned ? median(daytimeHrSamples) : nil
 
-        // Learned WAKE time trains ONLY on genuine wakes ("hr_steps"/"resume"); "boundary" hard-exit
-        // and legacy-nil wakes are excluded, with its own session-count gate. Breaks the hard-exit→
-        // learned-wake feedback loop: with no genuine wake signal (sparse-HR night) this stays nil and
-        // the host falls back to the configured wake. Onset still learns from all sessions.
+        // Learned WAKE time trains ONLY on genuine wakes ("hr_steps"/"resume"/"steps"); "boundary"
+        // hard-exit and legacy-nil wakes are excluded, with its own session-count gate. Breaks the
+        // hard-exit→learned-wake feedback loop: with no genuine wake signal (sparse-HR night) this
+        // stays nil and the host falls back to the configured wake. Onset still learns from all
+        // sessions. "steps" (2026-07-08, AAPS dea9d300ff): steps-only wake when HR is unreliable — a
+        // genuine getting-up signal, so it trains too.
         let genuineWakeMins = h.sessions
-            .filter { $0.wakeReason == "hr_steps" || $0.wakeReason == "resume" }
+            .filter { $0.wakeReason == "hr_steps" || $0.wakeReason == "resume" || $0.wakeReason == "steps" }
             .map { msToMinOfDay($0.wakeMs, localOffsetMs: localOffsetMs) }
         let wakeAvg = genuineWakeMins.count >= minSessionsForLearned ? circularMean(genuineWakeMins) : nil
 

@@ -136,15 +136,20 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertEqual(state.sleepEntryReason, "drought")
     }
 
-    func testRecentHrGapDoesNotDroughtSleep() {
-        // A fresh sample 7 min ago: too old for the 5-min average (avgHr == nil) but recent enough
-        // that drought (≥30 min) is NOT established → neither qualifier fires → no sleep.
+    func testReliableRecentAwakeHrDoesNotDroughtSleep() {
+        // A RELIABLE recent feed (≥ hrReliableMinSamples fresh) at an awake HR: the drought clock is
+        // reset (drought not established) and HR is too high to sleep-qualify → no sleep candidate.
+        // 2026-07-08 (AAPS dea9d300ff): reliability, not avgHr==nil, drives the drought fallback.
         let now = 1_000_000.0
-        let reading = SleepHrReading(timestampMs: now - 7 * minute, beatsPerMinute: 62, durationMs: 1000)
+        let readings = [
+            SleepHrReading(timestampMs: now - 2 * minute, beatsPerMinute: 80, durationMs: 1000),
+            SleepHrReading(timestampMs: now - 1 * minute, beatsPerMinute: 80, durationMs: 1000),
+            SleepHrReading(timestampMs: now, beatsPerMinute: 80, durationMs: 1000)
+        ]
         var state = SleepDetectorState(state: .preSleep, enteredAtMs: now)
-        let t0 = makeInputs(hrReadings: [reading], steps15min: 0, nowMinuteOfDay: 1380, nowMs: now)
+        let t0 = makeInputs(hrReadings: readings, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 1380, nowMs: now)
         state = D.step(t0, state)
-        XCTAssertNil(state.sleepCandidateSinceMs)
+        XCTAssertNil(state.sleepCandidateSinceMs) // HR 80 > sleepCap 69 → not sleep-qualifying; drought reset
         XCTAssertEqual(state.state, .preSleep)
     }
 
@@ -359,14 +364,15 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertEqual(out.wakeReason, "hr_steps")
     }
 
-    func testCumulativeLumpWithoutSustainedHrDoesNotWake() {
-        // A step lump but only ONE elevated-HR cycle (REM-like) → no wake candidacy.
+    func testModerateLumpWithoutSustainedHrDoesNotWake() {
+        // A MODERATE step lump (below the strong steps-alone bar of 250) with only ONE elevated-HR
+        // cycle: the gentle rule needs sustained HR (streak ≥ 2, only reaches 1) and Rule 2 needs
+        // ≥ 250 cumulative steps — neither fires, so no wake candidacy. (2026-07-08, AAPS dea9d300ff.)
         var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0)
         state = D.step(
             makeInputs(avgHeartRate: 55, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 0, stepsToday: 0),
             state
         )
-        // Single high-HR cycle with a big lump: streak only reaches 1 → HR not sustained → no candidacy.
         let out = D.step(
             makeInputs(
                 avgHeartRate: 90,
@@ -374,7 +380,7 @@ final class SleepStateDetectorTests: XCTestCase {
                 steps15min: 0,
                 nowMinuteOfDay: 360,
                 nowMs: 5 * minute,
-                stepsToday: 1300
+                stepsToday: 200 // below WAKE_STEP_STRONG_THRESHOLD (250) → Rule 2 does not fire
             ),
             state
         )
@@ -421,6 +427,102 @@ final class SleepStateDetectorTests: XCTestCase {
             SleepStepSample(tMs: 40 * minute, steps: 300) // +50
         ]
         XCTAssertEqual(SleepStateDetector.stepGrowth(samples, nowMs: 40 * minute, lookbackMin: 60), 200)
+    }
+
+    // MARK: degraded-HR fallback + steps-alone wake (2026-07-08, AAPS dea9d300ff)
+
+    func testFlickeringHrFeedReachesSleepingWithReasonTime() {
+        // Intermittent feed: one stray HR sample per cycle (< hrReliableMinSamples → unreliable), too
+        // high to sleep-qualify, in the night window with low steps. Stray samples don't reset the
+        // drought clock → drought established → droughtQualifies → SLEEPING after hysteresis, reason
+        // "time" (intermittent, avgHr non-nil). The 3-night stuck-in-PRE_SLEEP fix.
+        func stray(_ nowMs: Double) -> SleepDetectorInputs {
+            makeInputs(
+                hrReadings: [SleepHrReading(timestampMs: nowMs, beatsPerMinute: 80, durationMs: 1000)],
+                restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 1380, nowMs: nowMs
+            )
+        }
+        var state = SleepDetectorState(state: .preSleep, enteredAtMs: 0)
+        state = D.step(stray(0), state)
+        XCTAssertEqual(state.sleepCandidateSinceMs, 0) // drought candidate started on the degraded feed
+        let out = D.step(stray(10 * minute), state) // held 10m ≥ sleep hysteresis
+        XCTAssertEqual(out.state, .sleeping)
+        XCTAssertEqual(out.sleepEntryReason, "time")
+    }
+
+    func testDeadHrStrongStepsWakesWithReasonSteps() {
+        // HR feed dead (no samples → unreliable, drought established); a strong sustained step lump
+        // (≥ WAKE_STEP_STRONG_THRESHOLD) wakes on steps alone → reason "steps" (Rule 2).
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: 0, lastFreshHrSampleMs: 0)
+        state = D.step(
+            makeInputs(avgHeartRate: 0, restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 360, nowMs: 0, stepsToday: 0),
+            state
+        )
+        XCTAssertNil(state.wakeCandidateSinceMs)
+        // stepsToday 0 → 400 (≥ 250) → strong-steps candidacy (drought established, HR dead).
+        state = D.step(
+            makeInputs(
+                avgHeartRate: 0,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 1 * minute,
+                stepsToday: 400
+            ),
+            state
+        )
+        XCTAssertEqual(state.wakeCandidateSinceMs, 1 * minute)
+        let out = D.step(
+            makeInputs(
+                avgHeartRate: 0,
+                restingHeartRate: 60,
+                steps15min: 0,
+                nowMinuteOfDay: 360,
+                nowMs: 6 * minute,
+                stepsToday: 500
+            ),
+            state
+        )
+        XCTAssertEqual(out.state, .awake)
+        XCTAssertEqual(out.wakeReason, "steps")
+    }
+
+    func testLiveHrBlocksStepsOnlyWake() {
+        // With a RELIABLE live HR feed (drought NOT established), the strong steps-alone rule must NOT
+        // fire — the both-required guard holds. The gentle rule is also inert (HR below wake floor),
+        // so a big step lump does NOT wake. Prior fresh sample avoids the transmission-resume path.
+        let base = 1_000_000.0
+        func live(_ nowMs: Double, steps: Int) -> SleepDetectorInputs {
+            makeInputs(hrReadings: [
+                SleepHrReading(timestampMs: nowMs - 2 * minute, beatsPerMinute: 65, durationMs: 1000),
+                SleepHrReading(timestampMs: nowMs - 1 * minute, beatsPerMinute: 65, durationMs: 1000),
+                SleepHrReading(timestampMs: nowMs, beatsPerMinute: 65, durationMs: 1000)
+            ], restingHeartRate: 60, steps15min: 0, nowMinuteOfDay: 180, nowMs: nowMs, stepsToday: steps)
+        }
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: base, lastFreshHrSampleMs: base - 5 * minute)
+        state = D.step(live(base, steps: 0), state)
+        let out = D.step(live(base + 5 * minute, steps: 500), state) // 500 ≥ 250 but HR live → no steps-only wake
+        XCTAssertNil(out.wakeCandidateSinceMs)
+        XCTAssertEqual(out.state, .sleeping)
+    }
+
+    func testGentleWakeTimeGatedAwayFromScheduledWake() {
+        // HR-rise + steps that satisfy the gentle rule, but far from scheduled wake (02:00 vs 07:00) →
+        // gentle is time-gated (nearScheduledWake false) and steps-alone is blocked (HR live, drought
+        // not established) → no wake. Prior fresh sample avoids the transmission-resume path.
+        let base = 1_000_000.0
+        func rise(_ nowMs: Double) -> SleepDetectorInputs {
+            makeInputs(hrReadings: [
+                SleepHrReading(timestampMs: nowMs - 2 * minute, beatsPerMinute: 82, durationMs: 1000),
+                SleepHrReading(timestampMs: nowMs - 1 * minute, beatsPerMinute: 82, durationMs: 1000),
+                SleepHrReading(timestampMs: nowMs, beatsPerMinute: 82, durationMs: 1000)
+            ], restingHeartRate: 60, steps15min: 120, nowMinuteOfDay: 120, nowMs: nowMs)
+        }
+        var state = SleepDetectorState(state: .sleeping, enteredAtMs: base, lastFreshHrSampleMs: base - 5 * minute)
+        state = D.step(rise(base), state) // streak → 1
+        let out = D.step(rise(base + 5 * minute), state) // streak → 2, HR+steps met, but 02:00 not near wake
+        XCTAssertNil(out.wakeCandidateSinceMs)
+        XCTAssertEqual(out.state, .sleeping)
     }
 
     // MARK: serialization round-trip

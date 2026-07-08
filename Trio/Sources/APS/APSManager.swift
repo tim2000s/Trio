@@ -519,9 +519,27 @@ final class BaseAPSManager: APSManager, Injectable {
             // completion handlers always fire, so this can't hang the loop; the snapshot's 30-min
             // staleness guard is the backstop). Only when Boost is enabled — when off, nothing reads
             // the snapshot, so the HealthKit work would be pure waste.
-            let boostEnabled = (storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)?.boostMode ?? .off) != .off
+            let boostPrefs = storage.retrieve(OpenAPS.Settings.preferences, as: Preferences.self)
+            let boostEnabled = (boostPrefs?.boostMode ?? .off) != .off
             if boostEnabled {
                 await boostActivityMonitor.refresh()
+            }
+
+            // Composed brake-floor hypo-gate (2026-07-08, AAPS 9110ef2520 + 8b492a08e7). The floor is
+            // insulin-ADDING, so it may engage only while the user's trailing-14d TBR<63 < 2.0% AND
+            // TBR<70 < 3.5% (fail-closed). A 14d metric barely moves within an hour, so recompute at
+            // most hourly and only when the floor could actually engage (active mode + toggle on) —
+            // otherwise the gate stays fail-closed and the 14d BG scan is skipped. BoostV5Adapter
+            // ANDs the cached result into composedFloorActive.
+            if boostPrefs?.boostMode == .active, boostPrefs?.boostV5ComposedFloorActive == true,
+               BoostComposedFloorGate.shouldRecompute(now: now)
+            {
+                let since = now.addingTimeInterval(-14 * 86400)
+                let bgs = try await fetchGlucose(
+                    predicate: NSPredicate(format: "date >= %@", since as NSDate), fetchLimit: 6000
+                )
+                let values = bgs.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+                BoostComposedFloorGate.update(now: now, glucoseValuesMgdl: values)
             }
 
             let determination = try await openAPS.determineBasal(
