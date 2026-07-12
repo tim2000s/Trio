@@ -428,6 +428,13 @@ extension BaseFetchGlucoseManager {
     ///
     func exponentialSmoothingGlucose(context: NSManagedObjectContext) async {
         let startTime = Date()
+        // Adaptive Smoothing consume (P2): when the smoother is `.adaptive`, run the Adaptive Smoothing
+        // engine (UKF core) over the same window AFTER the exponential pass and OVERWRITE
+        // `smoothedGlucose` wherever it produced a valid (non-nil) smoothed level. The exponential pass
+        // still runs unconditionally first, so it remains the proven baseline and the fail-safe
+        // fallback for any reading the engine can't smooth. When the smoother is `.exponential`/`.off`
+        // this branch does not run and the delivered `smoothedGlucose` is byte-identical to today.
+        let useAdaptiveSmoothing = settingsManager.settings.glucoseSmoother == .adaptive
 
         do {
             // get objectIDs
@@ -455,6 +462,8 @@ extension BaseFetchGlucoseManager {
                     secondOrderBeta: 1.0
                 )
 
+                if useAdaptiveSmoothing { Self.applyAdaptiveSmoothingAndStore(glucoseReadings: glucoseReadings) }
+
                 try context.save()
             }
 
@@ -462,6 +471,56 @@ extension BaseFetchGlucoseManager {
             debugPrint(String(format: "Exponential smoothing duration: %0.04fs", duration))
         } catch {
             debug(.deviceManager, "Failed to smooth glucose: \(error)")
+        }
+    }
+
+    /// Adaptive Smoothing consume (P2) — run the Adaptive Smoothing engine (an Unscented Kalman Filter
+    /// core) over the same window (reversed to the newest-first order it requires) and OVERWRITE
+    /// `smoothedGlucose` wherever it produced a valid (non-nil) value. Readings it can't smooth keep the
+    /// exponential value written by `applyExponentialSmoothingAndStore`, so the result is never worse
+    /// than the exponential path. Runs on the context queue. Static to avoid self-capture.
+    static func applyAdaptiveSmoothingAndStore(glucoseReadings data: [GlucoseStored]) {
+        // Minimum stored smoothed glucose (mg/dL) — matches the exponential path's floor exactly.
+        let minimumSmoothedGlucose: Decimal = 39
+
+        // `data` arrives OLDEST-first: fetchGlucose fetches date-descending for the limit, then
+        // REVERSES before returning (see fetchGlucose). The UKF requires NEWEST-first (data[0] = most
+        // recent) — fed oldest-first, findDataSegments sees negative time-diffs, forms no segment, and
+        // copies raw (the filter goes inert). So reverse here. Pairing keeps write-back aligned.
+        let pairs: [(GlucoseStored, InMemoryGlucoseValue)] = data.reversed().compactMap { g in
+            guard let date = g.date else { return nil }
+            return (g, InMemoryGlucoseValue(timestamp: Int64(date.timeIntervalSince1970 * 1000), value: Double(g.glucose)))
+        }
+
+        guard !pairs.isEmpty else { return }
+
+        let out = UnscentedKalmanFilter().smooth(pairs.map(\.1))
+
+        guard out.count == pairs.count else {
+            debug(
+                .deviceManager,
+                "Adaptive smoothing: count mismatch (in=\(pairs.count) out=\(out.count)); keeping exponential smoothing"
+            )
+            return
+        }
+
+        for i in pairs.indices {
+            guard let s = out[i].smoothed else { continue } // no valid smoothed value → keep exponential
+            // Match the exponential storage treatment exactly: round to whole mg/dL (ties away from
+            // zero), floor at 39, store as NSDecimalNumber.
+            let rounded = Decimal(s).rounded(toPlaces: 0)
+            let clamped = max(rounded, minimumSmoothedGlucose)
+            pairs[i].0.smoothedGlucose = clamped as NSDecimalNumber
+        }
+
+        // Observability: summarise the newest reading (raw vs consumed smoothed value + trend + count).
+        if let newest = out.first, let smoothedValue = newest.smoothed, let newestRaw = pairs.first?.1 {
+            let stored = pairs.first?.0.smoothedGlucose?.doubleValue
+            debug(
+                .deviceManager,
+                "Adaptive smoothing (n=\(pairs.count)): raw=\(Int(newestRaw.value)) out=\(String(format: "%.1f", smoothedValue)) " +
+                    "stored=\(stored.map { String(format: "%.0f", $0) } ?? "nil") trend=\(newest.trendArrow.rawValue)"
+            )
         }
     }
 
