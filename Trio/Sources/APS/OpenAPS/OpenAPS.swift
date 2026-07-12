@@ -385,7 +385,7 @@ final class OpenAPS {
     func determineBasal(
         currentTemp: TempBasal,
         shouldSmoothGlucose: Bool,
-        useSwiftOref: Bool,
+        useJavascriptOref: Bool,
         clock: Date = Date(),
         simulatedCarbsAmount: Decimal? = nil,
         simulatedBolusAmount: Decimal? = nil,
@@ -448,7 +448,7 @@ final class OpenAPS {
             clock: clock,
             carbs: carbsAsJSON,
             glucose: glucoseAsJSON,
-            useSwiftOref: useSwiftOref
+            useJavascriptOref: useJavascriptOref
         )
 
         // IOB calculation
@@ -457,7 +457,7 @@ final class OpenAPS {
             profile: profile,
             clock: clock,
             autosens: autosens.isEmpty ? .null : autosens,
-            useSwiftOref: useSwiftOref
+            useJavascriptOref: useJavascriptOref
         )
 
         // TODO: refactor this to core data
@@ -485,7 +485,7 @@ final class OpenAPS {
             preferences: preferences,
             basalProfile: basalProfile,
             trioCustomOrefVariables: trioCustomOrefVariables,
-            useSwiftOref: useSwiftOref,
+            useJavascriptOref: useJavascriptOref,
             simulation: simulation
         )
 
@@ -579,7 +579,7 @@ final class OpenAPS {
         }
     }
 
-    func autosense(shouldSmoothGlucose: Bool, useSwiftOref: Bool) async throws -> Autosens? {
+    func autosense(shouldSmoothGlucose: Bool, useJavascriptOref: Bool) async throws -> Autosens? {
         debug(.openAPS, "Start autosens")
 
         // Perform asynchronous calls in parallel
@@ -608,7 +608,7 @@ final class OpenAPS {
             profile: profile,
             carbs: carbsAsJSON,
             temptargets: tempTargets,
-            useSwiftOref: useSwiftOref
+            useJavascriptOref: useJavascriptOref
         )
 
         debug(.openAPS, "AUTOSENS: \(autosenseResult)")
@@ -622,7 +622,7 @@ final class OpenAPS {
         }
     }
 
-    func createProfiles(useSwiftOref: Bool) async throws {
+    func createProfiles(useJavascriptOref: Bool) async throws {
         debug(.openAPS, "Start creating pump profile and user profile")
 
         // Load required settings and profiles asynchronously
@@ -699,7 +699,7 @@ final class OpenAPS {
                 model: model,
                 autotune: RawJSON.null,
                 trioSettings: trioSettings,
-                useSwiftOref: useSwiftOref,
+                useJavascriptOref: useJavascriptOref,
                 clock: clock
             )
 
@@ -714,7 +714,7 @@ final class OpenAPS {
                 model: model,
                 autotune: RawJSON.null,
                 trioSettings: trioSettings,
-                useSwiftOref: useSwiftOref,
+                useJavascriptOref: useJavascriptOref,
                 clock: clock
             )
 
@@ -730,20 +730,26 @@ final class OpenAPS {
         }
     }
 
-    private func iob(pumphistory: JSON, profile: JSON, clock: JSON, autosens: JSON, useSwiftOref: Bool) async throws -> RawJSON {
+    private func iob(
+        pumphistory: JSON,
+        profile: JSON,
+        clock: JSON,
+        autosens: JSON,
+        useJavascriptOref: Bool
+    ) async throws -> RawJSON {
         // FIXME: For now we'll just remove duplicate suspends here (ISSUE-399)
         var pumphistory = pumphistory
         if let pumpHistoryArray = try? JSONBridge.pumpHistory(from: pumphistory) {
             pumphistory = pumpHistoryArray.removingDuplicateSuspendResumeEvents().rawJSON
         }
 
-        if useSwiftOref {
+        if useJavascriptOref {
+            let jsResult = await iobJavascript(pumphistory: pumphistory, profile: profile, clock: clock, autosens: autosens)
+            return try jsResult.returnOrThrow()
+        } else {
             let swiftResult = OpenAPSSwift
                 .iob(pumphistory: pumphistory, profile: profile, clock: clock, autosens: autosens)
             return try swiftResult.returnOrThrow()
-        } else {
-            let jsResult = await iobJavascript(pumphistory: pumphistory, profile: profile, clock: clock, autosens: autosens)
-            return try jsResult.returnOrThrow()
         }
     }
 
@@ -778,9 +784,19 @@ final class OpenAPS {
         clock: JSON,
         carbs: JSON,
         glucose: JSON,
-        useSwiftOref: Bool
+        useJavascriptOref: Bool
     ) async throws -> RawJSON {
-        if useSwiftOref {
+        if useJavascriptOref {
+            let jsResult = await mealJavascript(
+                pumphistory: pumphistory,
+                profile: profile,
+                basalProfile: basalProfile,
+                clock: clock,
+                carbs: carbs,
+                glucose: glucose
+            )
+            return try jsResult.returnOrThrow()
+        } else {
             let swiftResult = OpenAPSSwift
                 .meal(
                     pumphistory: pumphistory,
@@ -791,16 +807,6 @@ final class OpenAPS {
                     glucose: glucose
                 )
             return try swiftResult.returnOrThrow()
-        } else {
-            let jsResult = await mealJavascript(
-                pumphistory: pumphistory,
-                profile: profile,
-                basalProfile: basalProfile,
-                clock: clock,
-                carbs: carbs,
-                glucose: glucose
-            )
-            return try jsResult.returnOrThrow()
         }
     }
 
@@ -844,9 +850,19 @@ final class OpenAPS {
         profile: JSON,
         carbs: JSON,
         temptargets: JSON,
-        useSwiftOref: Bool
+        useJavascriptOref: Bool
     ) async throws -> RawJSON {
-        if useSwiftOref {
+        if useJavascriptOref {
+            let jsResult = await autosenseJavascript(
+                glucose: glucose,
+                pumpHistory: pumpHistory,
+                basalprofile: basalprofile,
+                profile: profile,
+                carbs: carbs,
+                temptargets: temptargets
+            )
+            return try jsResult.returnOrThrow()
+        } else {
             let swiftResult = OpenAPSSwift
                 .autosense(
                     glucose: glucose,
@@ -858,16 +874,6 @@ final class OpenAPS {
                     clock: Date()
                 )
             return try swiftResult.returnOrThrow()
-        } else {
-            let jsResult = await autosenseJavascript(
-                glucose: glucose,
-                pumpHistory: pumpHistory,
-                basalprofile: basalprofile,
-                profile: profile,
-                carbs: carbs,
-                temptargets: temptargets
-            )
-            return try jsResult.returnOrThrow()
         }
     }
 
@@ -917,12 +923,29 @@ final class OpenAPS {
         preferences: JSON,
         basalProfile: JSON,
         trioCustomOrefVariables: JSON,
-        useSwiftOref: Bool,
+        useJavascriptOref: Bool,
         simulation: Bool = false
     ) async throws -> RawJSON {
         let clock = Date()
 
-        if useSwiftOref {
+        if useJavascriptOref {
+            let jsResult = await determineBasalJavascript(
+                glucose: glucose,
+                currentTemp: currentTemp,
+                iob: iob,
+                profile: profile,
+                autosens: autosens,
+                meal: meal,
+                microBolusAllowed: microBolusAllowed,
+                reservoir: reservoir,
+                pumpHistory: pumpHistory,
+                preferences: preferences,
+                basalProfile: basalProfile,
+                trioCustomOrefVariables: trioCustomOrefVariables,
+                clock: clock
+            )
+            return try jsResult.returnOrThrow()
+        } else {
             let swiftResult = OpenAPSSwift.determineBasal(
                 glucose: glucose,
                 currentTemp: currentTemp,
@@ -940,23 +963,6 @@ final class OpenAPS {
                 simulation: simulation
             )
             return try swiftResult.returnOrThrow()
-        } else {
-            let jsResult = await determineBasalJavascript(
-                glucose: glucose,
-                currentTemp: currentTemp,
-                iob: iob,
-                profile: profile,
-                autosens: autosens,
-                meal: meal,
-                microBolusAllowed: microBolusAllowed,
-                reservoir: reservoir,
-                pumpHistory: pumpHistory,
-                preferences: preferences,
-                basalProfile: basalProfile,
-                trioCustomOrefVariables: trioCustomOrefVariables,
-                clock: clock
-            )
-            return try jsResult.returnOrThrow()
         }
     }
 
@@ -1076,24 +1082,10 @@ final class OpenAPS {
         model: JSON,
         autotune: JSON,
         trioSettings: JSON,
-        useSwiftOref: Bool,
+        useJavascriptOref: Bool,
         clock: Date
     ) async throws -> RawJSON {
-        if useSwiftOref {
-            let swiftResult = OpenAPSSwift.makeProfile(
-                preferences: preferences,
-                pumpSettings: pumpSettings,
-                bgTargets: bgTargets,
-                basalProfile: basalProfile,
-                isf: isf,
-                carbRatio: carbRatio,
-                tempTargets: tempTargets,
-                model: model,
-                trioSettings: trioSettings,
-                clock: clock
-            )
-            return try swiftResult.returnOrThrow()
-        } else {
+        if useJavascriptOref {
             let jsResult = await makeProfileJavascript(
                 preferences: preferences,
                 pumpSettings: pumpSettings,
@@ -1107,6 +1099,20 @@ final class OpenAPS {
                 trioSettings: trioSettings
             )
             return try jsResult.returnOrThrow()
+        } else {
+            let swiftResult = OpenAPSSwift.makeProfile(
+                preferences: preferences,
+                pumpSettings: pumpSettings,
+                bgTargets: bgTargets,
+                basalProfile: basalProfile,
+                isf: isf,
+                carbRatio: carbRatio,
+                tempTargets: tempTargets,
+                model: model,
+                trioSettings: trioSettings,
+                clock: clock
+            )
+            return try swiftResult.returnOrThrow()
         }
     }
 
