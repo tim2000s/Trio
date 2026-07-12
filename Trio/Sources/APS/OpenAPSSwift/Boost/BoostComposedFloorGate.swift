@@ -1,5 +1,6 @@
-import BoostV5Core
 import Foundation
+// Note: BoostV5Core sources are compiled into the Trio app target (not a separate module), so
+// `ComposedFloor` is used directly — no `import BoostV5Core` (which would fail to resolve).
 
 /// Throttled trailing-14d hypo-gate for the composed brake-floor (2026-07-08, AAPS 9110ef2520 +
 /// 8b492a08e7). The floor is insulin-ADDING, so it may engage only while the user's low exposure is
@@ -16,7 +17,7 @@ enum BoostComposedFloorGate {
     /// Recompute cadence — a 14d metric barely moves within an hour. (AAPS `TBR_GATE_REFRESH_MS`.)
     static let refreshInterval: TimeInterval = 3600
     /// Minimum 14d CGM readings before the fraction is trusted (~3.5 days of 5-min CGM). (AAPS 1000.)
-    static let minReadings = 1000
+    static let minReadings = ComposedFloor.gateMinReadings
 
     private static let lock = NSLock()
     private static var storedAllowed = false
@@ -39,15 +40,9 @@ enum BoostComposedFloorGate {
     /// Recompute the gate from trailing-14d glucose (mg/dL, already sanity-filtered to 20…600 by the
     /// caller — Trio's convention, matching the auto-config TBR maths). Fail-closed on thin history.
     static func update(now: Date, glucoseValuesMgdl: [Int]) {
-        let n = glucoseValuesMgdl.count
-        let result: Bool
-        if n >= minReadings {
-            let tbr63 = 100.0 * Double(glucoseValuesMgdl.filter { $0 < 63 }.count) / Double(n)
-            let tbr70 = 100.0 * Double(glucoseValuesMgdl.filter { $0 < 70 }.count) / Double(n)
-            result = ComposedFloor.allowedByTbr(tbr63Pct: tbr63, tbr70Pct: tbr70)
-        } else {
-            result = false // fail-closed: insufficient history to trust the fraction
-        }
+        // The safety-critical decision (min-readings fail-closed + TBR<63/<70 math) lives in the
+        // unit-tested BoostV5Core; this store only caches it under a lock + throttle.
+        let result = ComposedFloor.allowedFromGlucose(valuesMgdl: glucoseValuesMgdl, minReadings: minReadings)
         lock.lock()
         defer { lock.unlock() }
         storedAllowed = result

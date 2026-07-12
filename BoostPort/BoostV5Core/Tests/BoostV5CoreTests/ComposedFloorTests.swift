@@ -89,6 +89,46 @@ final class ComposedFloorTests: XCTestCase {
         XCTAssertFalse(ComposedFloor.allowedByTbr(tbr63Pct: nil, tbr70Pct: nil))
     }
 
+    // MARK: gate decision from raw 14d glucose (the enforcement store's safety-critical branches)
+
+    // `below63` values sit <63 (counted in both TBR<63 and TBR<70); `between63and70` sit in [63,70)
+    // (counted in TBR<70 only); the remainder are 120 mg/dL (≥70).
+
+    private func glucose(n: Int, below63: Int, between63and70: Int) -> [Int] {
+        precondition(below63 + between63and70 <= n)
+        return Array(repeating: 50, count: below63)
+            + Array(repeating: 65, count: between63and70)
+            + Array(repeating: 120, count: n - below63 - between63and70)
+    }
+
+    func testGateFailsClosedBelowMinReadings() {
+        // 999 perfect readings (zero lows) is still NOT enough history to trust — fail closed.
+        XCTAssertFalse(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 999, below63: 0, between63and70: 0)))
+        XCTAssertFalse(ComposedFloor.allowedFromGlucose(valuesMgdl: []))
+    }
+
+    func testGateAllowsAtMinReadingsWithLowExposure() {
+        // Exactly 1000 readings, TBR<63 1.5% / TBR<70 3.0% — both under → allowed.
+        XCTAssertTrue(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 1000, below63: 15, between63and70: 15)))
+        // Zero lows at the threshold → allowed.
+        XCTAssertTrue(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 1000, below63: 0, between63and70: 0)))
+    }
+
+    func testGateBlocksWhenTbr63OverBar() {
+        // TBR<63 2.5% (> 2.0) → blocked even though TBR<70 is fine.
+        XCTAssertFalse(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 1000, below63: 25, between63and70: 0)))
+    }
+
+    func testGateBlocksAtExactTbr63Bar() {
+        // TBR<63 exactly 2.0% — strict `<` → blocked.
+        XCTAssertFalse(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 1000, below63: 20, between63and70: 0)))
+    }
+
+    func testGateBlocksWhenTbr70OverBar_userCClass() {
+        // user-C: TBR<63 1.5% (under) but TBR<70 4.0% (> 3.5, over the two-test bar) → blocked.
+        XCTAssertFalse(ComposedFloor.allowedFromGlucose(valuesMgdl: glucose(n: 1000, below63: 15, between63and70: 25)))
+    }
+
     // MARK: decide() — shadow vs active integration
 
     /// COMMITTED, floor conditions met, decelerating + low velocity so the composed pipeline dose is
