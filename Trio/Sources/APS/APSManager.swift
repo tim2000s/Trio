@@ -1275,13 +1275,27 @@ final class BaseAPSManager: APSManager, Injectable {
                 }
             if !applied.isEmpty || !heldSuggestions.isEmpty {
                 let pretty = (applied + heldSuggestions).map { "• \($0)" }.joined(separator: "\n")
-                router.alertMessage.send(MessageContent(
-                    content: "Boost V6 set \(applied.count) setting(s) from your last 14 days " +
+                // dev removed the lightweight `router.alertMessage`/`MessageContent`
+                // banner system; surface this the same way dev migrated those info
+                // banners — a one-shot info Alert through TrioAlertManager.
+                let content = Alert.Content(
+                    title: String(localized: "Boost V6 auto-config"),
+                    body: "Boost V6 set \(applied.count) setting(s) from your last 14 days " +
                         "(your other settings were kept):\n\(pretty)",
-                    type: .info,
-                    subtype: .algorithm,
-                    title: "Boost V6 auto-config"
-                ))
+                    acknowledgeActionButtonLabel: String(localized: "OK")
+                )
+                let alert = Alert(
+                    identifier: Alert.Identifier(
+                        managerIdentifier: "trio.boost",
+                        alertIdentifier: "boost.autoconfig"
+                    ),
+                    foregroundContent: content,
+                    backgroundContent: content,
+                    trigger: .immediate,
+                    interruptionLevel: .active,
+                    sound: nil
+                )
+                trioAlertManager.issueAlert(alert)
             }
         } catch {
             debug(.apsManager, "BoostV5 auto-config failed (non-fatal): \(error)")
