@@ -107,7 +107,6 @@ final class BaseAPSManager: APSManager, Injectable {
     @Injected() private var broadcaster: Broadcaster!
     @Injected() private var trioAlertManager: TrioAlertManager!
     @Injected() private var boostActivityMonitor: BoostActivityMonitor!
-    @Injected() private var router: Router!
     @Persisted(key: "lastLoopStartDate") private var lastLoopStartDate: Date = .distantPast
     @Persisted(key: "lastLoopDate") var lastLoopDate: Date = .distantPast {
         didSet {
