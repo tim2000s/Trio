@@ -227,6 +227,9 @@ enum BoostV5Adapter {
                 exerciseActive: activity.exerciseActive,
                 inPostExerciseWindow: activity.inPostExerciseWindow,
                 asleep: activity.asleep,
+                // fastCarbConfirmEnabled must appear before postRescueWindow to match the V5Inputs
+                // initializer's parameter order.
+                fastCarbConfirmEnabled: knobs.fastCarbConfirm,
                 // 2026-07-06/07 composed brake-floor inputs (AAPS e0f18ddd0e + 730b3dcb2c). Computed
                 // here from the SAME sources the override seam uses: post-rescue = rolling 45-min CGM
                 // low < 75 (SafetyGateConstants.postRescueLowThresholdMgdl); v1WouldDose = the base
@@ -241,7 +244,6 @@ enum BoostV5Adapter {
                 // insulin-adding, so it cannot engage for a hypo-prone user even if toggled on.
                 composedFloorActive: mode == .active && knobs.composedFloorActive
                     && BoostComposedFloorGate.allowed,
-                fastCarbConfirmEnabled: knobs.fastCarbConfirm,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,
                 hypoCautionUserKnob: knobs.hypoCaution,

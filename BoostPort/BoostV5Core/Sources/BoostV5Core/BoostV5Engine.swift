@@ -367,6 +367,23 @@ enum ComposedFloor {
         return t63 < max63 && t70 < max70
     }
 
+    /// Minimum trailing-14d CGM readings before the TBR fractions are trusted (~3.5 days of 5-min
+    /// CGM). Below this the gate fails closed. (AAPS `TBR_GATE_MIN_READINGS` = 1000.)
+    static let gateMinReadings = 1000
+
+    /// The complete fail-closed hypo-gate decision from trailing-14d glucose values (mg/dL, already
+    /// sanity-filtered by the caller). Fewer than `minReadings` readings → NOT allowed (thin history
+    /// can't be trusted for an insulin-adding feature); otherwise computes TBR<63 / TBR<70 over the
+    /// SAME window and applies `allowedByTbr`. The host (`BoostComposedFloorGate`) wraps this in a
+    /// throttled, thread-safe cache; keeping the decision here puts the safety branches under test.
+    static func allowedFromGlucose(valuesMgdl: [Int], minReadings: Int = gateMinReadings) -> Bool {
+        let n = valuesMgdl.count
+        guard n >= minReadings else { return false }
+        let tbr63 = 100.0 * Double(valuesMgdl.filter { $0 < 63 }.count) / Double(n)
+        let tbr70 = 100.0 * Double(valuesMgdl.filter { $0 < 70 }.count) / Double(n)
+        return allowedByTbr(tbr63Pct: tbr63, tbr70Pct: tbr70)
+    }
+
     /// The composed Phase-3 floor's target dose (U) for this cycle — the single source of truth for
     /// BOTH the shadow field (toggle OFF: `wouldAdd = max(0, target − actualFinalDose)`) and the
     /// delivered floor (toggle ON: `finalDose = max(pipeline, clamped-and-rounded target)`), so the
