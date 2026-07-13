@@ -305,7 +305,7 @@ final class BaseFetchGlucoseManager: FetchGlucoseManager, Injectable {
         try await glucoseStorage.storeGlucose(filtered)
 
         if settingsManager.settings.smoothGlucose {
-            await exponentialSmoothingGlucose(context: context)
+            await applyGlucoseSmoothing(context: context)
         }
 
         deviceDataManager.heartbeat(date: Date())
@@ -382,7 +382,7 @@ extension BaseFetchGlucoseManager: SettingsObserver {
 
             self.glucoseStoreAndHeartLock.wait()
             Task {
-                await self.exponentialSmoothingGlucose(context: self.context)
+                await self.applyGlucoseSmoothing(context: self.context)
                 self.glucoseStoreAndHeartLock.signal()
             }
         }
@@ -423,12 +423,14 @@ extension BaseFetchGlucoseManager {
         return Array(glucoseArray.map(\.objectID).reversed())
     }
 
-    /// CoreData-friendly AAPS exponential smoothing + storage.
+    /// CoreData-friendly Adaptive Smoothing + storage. Gated by the `smoothGlucose` setting in the
+    /// caller. Adaptive Smoothing is the sole smoother (it replaced the previous double-exponential
+    /// one); it fail-safes internally — every returned point is floored at 39, and any point it can't
+    /// model is filled with the raw value — so no separate fallback pass is needed.
     /// - Important: Only stores `smoothedGlucose`. UI/alerts should still use `glucose`.
     ///
-    func exponentialSmoothingGlucose(context: NSManagedObjectContext) async {
+    func applyGlucoseSmoothing(context: NSManagedObjectContext) async {
         let startTime = Date()
-
         do {
             // get objectIDs
             let objectIDs = try await fetchGlucose(context: context)
@@ -443,143 +445,65 @@ extension BaseFetchGlucoseManager {
                 guard !glucoseReadings.isEmpty else { return }
 
                 // Static method call to avoid self-capture
-                Self.applyExponentialSmoothingAndStore(
-                    glucoseReadings: glucoseReadings,
-                    minimumWindowSize: 4,
-                    maximumAllowedGapMinutes: 12,
-                    xDripErrorGlucose: 38,
-                    minimumSmoothedGlucose: 39,
-                    firstOrderWeight: 0.4,
-                    firstOrderAlpha: 0.5,
-                    secondOrderAlpha: 0.4,
-                    secondOrderBeta: 1.0
-                )
+                Self.applyAdaptiveSmoothingAndStore(glucoseReadings: glucoseReadings)
 
                 try context.save()
             }
 
             let duration = Date().timeIntervalSince(startTime)
-            debugPrint(String(format: "Exponential smoothing duration: %0.04fs", duration))
+            debugPrint(String(format: "Adaptive smoothing duration: %0.04fs", duration))
         } catch {
             debug(.deviceManager, "Failed to smooth glucose: \(error)")
         }
     }
 
-    private static func applyExponentialSmoothingAndStore(
-        glucoseReadings data: [GlucoseStored],
-        minimumWindowSize: Int,
-        maximumAllowedGapMinutes: Int,
-        xDripErrorGlucose: Int,
-        minimumSmoothedGlucose: Decimal,
-        firstOrderWeight: Decimal,
-        firstOrderAlpha: Decimal,
-        secondOrderAlpha: Decimal,
-        secondOrderBeta: Decimal
-    ) {
-        guard !data.isEmpty else { return }
+    /// Adaptive Smoothing — the sole glucose smoother (it replaced the double-exponential one). Runs
+    /// the engine (an Unscented Kalman Filter core) over the window (reversed to the newest-first order
+    /// it requires) and writes `smoothedGlucose`. The engine fail-safes internally: `smooth()` floors
+    /// every point at 39 and fills any point it can't model with the raw value, so there's no separate
+    /// fallback pass — a reading it leaves unset simply falls back to `glucose` in oref.
+    /// Runs on the context queue. Static to avoid self-capture.
+    static func applyAdaptiveSmoothingAndStore(glucoseReadings data: [GlucoseStored]) {
+        // Minimum stored smoothed glucose (mg/dL).
+        let minimumSmoothedGlucose: Decimal = 39
 
-        // Determine the size of the valid most-recent smoothing window.
-        // We walk adjacent pairs from newest -> oldest to preserve the same window semantics
-        // as the original implementation, but avoid manual reverse indexing.
-        var validWindowCount = max(data.count - 1, 0)
-
-        for (recentOffset, pair) in zip(data.dropFirst().reversed(), data.dropLast().reversed()).enumerated() {
-            let (newer, older) = pair
-
-            guard let newerDate = newer.date, let olderDate = older.date else { continue }
-
-            let gapSeconds = newerDate.timeIntervalSince(olderDate)
-            let gapMinutesRounded = Int((gapSeconds / 60.0).rounded())
-
-            if gapMinutesRounded >= maximumAllowedGapMinutes {
-                validWindowCount = recentOffset + 1 // include the more recent reading
-                break
-            }
-
-            // Ported from AAPS: 38 mg/dL may represent an xDrip error state.
-            if Int(newer.glucose) == xDripErrorGlucose {
-                validWindowCount = recentOffset // exclude this 38 value
-                break
-            }
+        // `data` arrives OLDEST-first: fetchGlucose fetches date-descending for the limit, then
+        // REVERSES before returning (see fetchGlucose). The UKF requires NEWEST-first (data[0] = most
+        // recent) — fed oldest-first, findDataSegments sees negative time-diffs, forms no segment, and
+        // copies raw (the filter goes inert). So reverse here. Pairing keeps write-back aligned.
+        let pairs: [(GlucoseStored, InMemoryGlucoseValue)] = data.reversed().compactMap { g in
+            guard let date = g.date else { return nil }
+            return (g, InMemoryGlucoseValue(timestamp: Int64(date.timeIntervalSince1970 * 1000), value: Double(g.glucose)))
         }
 
-        // Not enough recent contiguous readings to smooth (e.g. after CGM gap).
-        // IMPORTANT: Only apply fallback to the recent window, not all data.
-        // Otherwise a recent gap would overwrite historical smoothed values.
-        guard validWindowCount >= minimumWindowSize else {
-            let recentWindow = data.suffix(validWindowCount)
+        guard !pairs.isEmpty else { return }
 
-            for object in recentWindow {
-                let raw = Decimal(Int(object.glucose))
-                object.smoothedGlucose = max(raw, minimumSmoothedGlucose) as NSDecimalNumber
-            }
+        let out = UnscentedKalmanFilter().smooth(pairs.map(\.1))
 
+        guard out.count == pairs.count else {
+            debug(
+                .deviceManager,
+                "Adaptive smoothing: count mismatch (in=\(pairs.count) out=\(out.count)); leaving smoothedGlucose unchanged"
+            )
             return
         }
 
-        // Restrict smoothing to the valid most-recent window, still in chronological order.
-        let validWindow = data.suffix(validWindowCount)
-
-        guard let oldest = validWindow.first else { return }
-
-        // ---- 1st order smoothing ----
-        var firstOrderSmoothed: [Decimal] = []
-        firstOrderSmoothed.reserveCapacity(validWindow.count)
-
-        var firstOrderCurrent = Decimal(Int(oldest.glucose))
-        firstOrderSmoothed.append(firstOrderCurrent)
-
-        for sample in validWindow.dropFirst() {
-            let raw = Decimal(Int(sample.glucose))
-            firstOrderCurrent = firstOrderCurrent + firstOrderAlpha * (raw - firstOrderCurrent)
-            firstOrderSmoothed.append(firstOrderCurrent)
-        }
-
-        // ---- 2nd order smoothing ----
-        let secondOrderInput = Array(validWindow)
-        guard secondOrderInput.count >= 2 else { return }
-
-        var secondOrderSmoothed: [Decimal] = []
-        secondOrderSmoothed.reserveCapacity(secondOrderInput.count)
-
-        var secondOrderDeltas: [Decimal] = []
-        secondOrderDeltas.reserveCapacity(secondOrderInput.count)
-
-        var previousSecondOrderSmoothed = Decimal(Int(secondOrderInput[0].glucose))
-        var previousSecondOrderDelta =
-            Decimal(Int(secondOrderInput[1].glucose) - Int(secondOrderInput[0].glucose))
-
-        secondOrderSmoothed.append(previousSecondOrderSmoothed)
-        secondOrderDeltas.append(previousSecondOrderDelta)
-
-        for sample in secondOrderInput.dropFirst() {
-            let raw = Decimal(Int(sample.glucose))
-
-            let nextSmoothed =
-                secondOrderAlpha * raw
-                    + (1 - secondOrderAlpha) * (previousSecondOrderSmoothed + previousSecondOrderDelta)
-
-            let nextDelta =
-                secondOrderBeta * (nextSmoothed - previousSecondOrderSmoothed)
-                    + (1 - secondOrderBeta) * previousSecondOrderDelta
-
-            previousSecondOrderSmoothed = nextSmoothed
-            previousSecondOrderDelta = nextDelta
-
-            secondOrderSmoothed.append(nextSmoothed)
-            secondOrderDeltas.append(nextDelta)
-        }
-
-        // ---- Weighted blend ----
-        let blended = zip(firstOrderSmoothed, secondOrderSmoothed).map { firstOrder, secondOrder in
-            firstOrderWeight * firstOrder + (1 - firstOrderWeight) * secondOrder
-        }
-
-        // Apply to the most recent valid-window readings.
-        for (object, blendedValue) in zip(validWindow, blended) {
-            let rounded = blendedValue.rounded(toPlaces: 0) // nearest integer, ties away from zero
+        for i in pairs.indices {
+            guard let s = out[i].smoothed else { continue } // no valid smoothed value → leave unset (oref uses raw)
+            // Round to whole mg/dL (ties away from zero), floor at 39, store as NSDecimalNumber.
+            let rounded = Decimal(s).rounded(toPlaces: 0)
             let clamped = max(rounded, minimumSmoothedGlucose)
-            object.smoothedGlucose = clamped as NSDecimalNumber
+            pairs[i].0.smoothedGlucose = clamped as NSDecimalNumber
+        }
+
+        // Observability: summarise the newest reading (raw vs consumed smoothed value + trend + count).
+        if let newest = out.first, let smoothedValue = newest.smoothed, let newestRaw = pairs.first?.1 {
+            let stored = pairs.first?.0.smoothedGlucose?.doubleValue
+            debug(
+                .deviceManager,
+                "Adaptive smoothing (n=\(pairs.count)): raw=\(Int(newestRaw.value)) out=\(String(format: "%.1f", smoothedValue)) " +
+                    "stored=\(stored.map { String(format: "%.0f", $0) } ?? "nil") trend=\(newest.trendArrow.rawValue)"
+            )
         }
     }
 }
