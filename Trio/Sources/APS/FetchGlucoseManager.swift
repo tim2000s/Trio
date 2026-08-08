@@ -394,9 +394,9 @@ extension BaseFetchGlucoseManager: SettingsObserver {
 
             self.glucoseStoreAndHeartLock.wait()
             Task {
-                let context = CoreDataStack.shared.newTaskContext()
-                context.name = "adaptiveSmoothingGlucose"
-                await self.applyGlucoseSmoothing(context: context)
+                let smoothingContext = CoreDataStack.shared.newTaskContext()
+                smoothingContext.name = "adaptiveSmoothingGlucose"
+                await self.applyGlucoseSmoothing(context: smoothingContext)
                 self.glucoseStoreAndHeartLock.signal()
             }
         }
@@ -405,8 +405,10 @@ extension BaseFetchGlucoseManager: SettingsObserver {
 
 extension BaseFetchGlucoseManager {
     func fetchGlucose(context: NSManagedObjectContext) async throws -> [NSManagedObjectID] {
-        // Compound predicate: time window + non-manual + valid date
-        let timePredicate = NSPredicate.predicateForOneDayAgoInMinutes
+        // Compound predicate: time window + non-manual + valid date.
+        // 34-hour window matches the period AndroidAPS feeds its smoother (24h + 10h max DIA), so
+        // Trio's Adaptive Smoothing sees the same history AAPS does.
+        let timePredicate = NSPredicate.predicateForThirtyFourHoursAgo
         let manualPredicate = NSPredicate(format: "isManual == NO")
         let datePredicate = NSPredicate(format: "date != nil")
 
@@ -419,15 +421,15 @@ extension BaseFetchGlucoseManager {
         let results = try await CoreDataStack.shared.fetchEntitiesAsync(
             ofType: GlucoseStored.self,
             onContext: context,
-            // Predicate must cover at least the full glucose horizon used by downstream algorithm consumers.
-            // If autosens / oref / smoothing logic ever starts looking back further (e.g. 36h),
-            // this fetch window must be expanded accordingly.
-            // Fetch descending (newest first) so the limit always keeps the most recent 350 readings.
+            // Fetch descending (newest first) so the limit keeps the most recent readings; the limit
+            // is a safety cap on smoothing cost, sized to cover the full 34h at 5-min spacing
+            // (34h ≈ 408 readings) with margin. A denser CGM caps here rather than spanning the full
+            // 34h — AAPS avoids that by 5-min bucketing; Trio smooths raw, so this cap stands in.
             // Reversed before return so callers receive oldest-first (chronological) order.
             predicate: compoundPredicate,
             key: "date",
             ascending: false,
-            fetchLimit: 350
+            fetchLimit: 500
         )
 
         guard let glucoseArray = results as? [GlucoseStored] else {
@@ -471,6 +473,57 @@ extension BaseFetchGlucoseManager {
         }
     }
 
+    /// Persistent smoother instance, reused across fetch cycles so the learned measurement-noise state
+    /// (`learnedR`, innovation windows, session counters) carries forward between calls. This matches
+    /// AndroidAPS — whose smoothing plugin is a singleton that persists `learnedR` across cycles — and
+    /// the Python reference, which keeps the same state as instance members. Constructing a fresh
+    /// `UnscentedKalmanFilter()` each cycle (the previous behaviour) left `lastProcessedTimestamp` at 0
+    /// every call, so `shouldResetLearning` took the clean-start path every cycle and the filter never
+    /// persisted — diverging from AAPS by up to ~15 mg/dL on real data. The core is documented as
+    /// "one instance carries the learned state across calls"; it is not thread-safe, so access is
+    /// serialised by `smootherLock` (fetch cycles are already serialised via `glucoseStoreAndHeartLock`
+    /// and the Core Data context queue — the lock is belt-and-braces).
+    private static let smootherLock = NSLock()
+    /// UserDefaults key for the smoother's learned state — mirrors AAPS persisting `learnedR` etc. to
+    /// preferences so learning survives an app restart.
+    private static let ukfStateKey = "adaptiveSmoothing.ukfPersistedState"
+    /// Set by `notifySensorChange()` (from the CGM sensor-start event), consumed on the next smooth —
+    /// the Trio analogue of AAPS's SENSOR_CHANGE therapy-event reset.
+    private static var pendingSensorChange = false
+    /// Persisted state is reloaded from UserDefaults exactly once, on the first smooth after launch.
+    private static var didRestoreUkfState = false
+    private static var sharedSmoother = makeSharedSmoother()
+
+    /// Build a smoother wired to the sensor-change signal. The closure is consumed once per `smooth()`
+    /// call (inside `smootherLock`), so a sensor change scheduled between cycles resets learning on the
+    /// next pass, exactly as AAPS's `checkForSensorChange` does.
+    private static func makeSharedSmoother() -> UnscentedKalmanFilter {
+        UnscentedKalmanFilter(sensorChangedSinceLastCall: {
+            let changed = pendingSensorChange
+            pendingSensorChange = false
+            return changed
+        })
+    }
+
+    /// Signal that the CGM sensor was replaced, so the next smoothing pass resets learned state (matches
+    /// AAPS resetting on a SENSOR_CHANGE therapy event). Wired from the CGM sensor-start path.
+    static func notifySensorChange() {
+        smootherLock.lock()
+        pendingSensorChange = true
+        smootherLock.unlock()
+    }
+
+    /// Reset the persistent smoother to a clean-start instance and clear its persisted state. Used by
+    /// tests for isolation; `didRestoreUkfState = true` so the fresh instance is not re-seeded from disk.
+    static func resetSharedSmoother() {
+        smootherLock.lock()
+        sharedSmoother = makeSharedSmoother()
+        pendingSensorChange = false
+        didRestoreUkfState = true
+        UserDefaults.standard.removeObject(forKey: ukfStateKey)
+        smootherLock.unlock()
+    }
+
     /// Adaptive Smoothing — the sole glucose smoother (it replaced the double-exponential one). Runs
     /// the engine (an Unscented Kalman Filter core) over the window (reversed to the newest-first order
     /// it requires) and writes `smoothedGlucose`. The engine fail-safes internally: `smooth()` floors
@@ -492,31 +545,55 @@ extension BaseFetchGlucoseManager {
 
         guard !pairs.isEmpty else { return }
 
-        let out = UnscentedKalmanFilter().smooth(pairs.map(\.1))
+        // AAPS feeds its smoother 5-min-BUCKETED data, not raw readings. Bucketing regularises
+        // sub-2-min-spaced backfills/catch-ups onto a 5-min grid, which prevents `findDataSegments`
+        // from breaking the segment and re-initialising the filter from a raw value (the "V-spike"
+        // glitch). The UKF core is unchanged — this is pure preprocessing, so per-call parity holds.
+        let bucketed = GlucoseBucketing.bucketed(pairs.map(\.1))
 
-        guard out.count == pairs.count else {
-            debug(
-                .deviceManager,
-                "Adaptive smoothing: count mismatch (in=\(pairs.count) out=\(out.count)); leaving smoothedGlucose unchanged"
-            )
-            return
+        // Reuse the persistent smoother (see `sharedSmoother`) so learned state carries across cycles,
+        // as it does in AAPS. Serialised because the core is not thread-safe.
+        smootherLock.lock()
+        // Once per launch, re-seed from the last saved state so learning survives an app restart
+        // (mirrors AAPS `loadPersistedParameters`). Fail-safe: a missing/corrupt store just starts clean.
+        if !didRestoreUkfState {
+            if let saved = UserDefaults.standard.data(forKey: ukfStateKey),
+               let state = try? JSONDecoder().decode(UnscentedKalmanFilter.PersistedState.self, from: saved)
+            {
+                sharedSmoother.restore(state)
+            }
+            didRestoreUkfState = true
         }
+        let grid = sharedSmoother.smooth(bucketed)
+        // Persist the updated learned state (mirrors AAPS saving after each smooth).
+        if let encoded = try? JSONEncoder().encode(sharedSmoother.persistedState) {
+            UserDefaults.standard.set(encoded, forKey: ukfStateKey)
+        }
+        smootherLock.unlock()
 
-        for i in pairs.indices {
-            guard let s = out[i].smoothed else { continue } // no valid smoothed value → leave unset (oref uses raw)
+        guard !grid.isEmpty else { return }
+
+        // Write-back: AAPS displays bucketed data directly, but Trio stores `smoothedGlucose` per
+        // `GlucoseStored` row (it also feeds dosing via oref's `recalculated = smoothed ?? value`). So
+        // each raw row samples the smoothed grid at its own timestamp by linear interpolation.
+        for (stored, raw) in pairs {
+            guard let s = GlucoseBucketing.interpolatedSmoothed(at: raw.timestamp, grid: grid) else { continue }
             // Round to whole mg/dL (ties away from zero), floor at 39, store as NSDecimalNumber.
             let rounded = Decimal(s).rounded(toPlaces: 0)
             let clamped = max(rounded, minimumSmoothedGlucose)
-            pairs[i].0.smoothedGlucose = clamped as NSDecimalNumber
+            stored.smoothedGlucose = clamped as NSDecimalNumber
         }
 
-        // Observability: summarise the newest reading (raw vs consumed smoothed value + trend + count).
-        if let newest = out.first, let smoothedValue = newest.smoothed, let newestRaw = pairs.first?.1 {
+        // Observability: summarise the newest reading (raw vs consumed smoothed value + trend + counts).
+        if let newestRaw = pairs.first?.1,
+           let smoothedValue = GlucoseBucketing.interpolatedSmoothed(at: newestRaw.timestamp, grid: grid)
+        {
             let stored = pairs.first?.0.smoothedGlucose?.doubleValue
             debug(
                 .deviceManager,
-                "Adaptive smoothing (n=\(pairs.count)): raw=\(Int(newestRaw.value)) out=\(String(format: "%.1f", smoothedValue)) " +
-                    "stored=\(stored.map { String(format: "%.0f", $0) } ?? "nil") trend=\(newest.trendArrow.rawValue)"
+                "Adaptive smoothing (n=\(pairs.count) buckets=\(bucketed.count)): raw=\(Int(newestRaw.value)) " +
+                    "out=\(String(format: "%.1f", smoothedValue)) stored=\(stored.map { String(format: "%.0f", $0) } ?? "nil") " +
+                    "trend=\(grid.first?.trendArrow.rawValue ?? "none")"
             )
         }
     }
