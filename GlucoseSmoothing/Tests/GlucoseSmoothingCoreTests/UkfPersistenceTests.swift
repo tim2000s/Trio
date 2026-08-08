@@ -24,7 +24,7 @@ final class UkfPersistenceTests: XCTestCase {
     func testRestoreRejectsOutOfBoundsLearnedR() {
         // Above rMax (225) and below rMin (16) must fall back to rInit (25); an in-range value is kept.
         let hi = UnscentedKalmanFilter()
-        hi.restore(.init(learnedR: 10_000, lastProcessedTimestamp: 1, sensorSessionId: 1))
+        hi.restore(.init(learnedR: 10000, lastProcessedTimestamp: 1, sensorSessionId: 1))
         XCTAssertEqual(hi.persistedState.learnedR, 25.0, "out-of-range (high) R must reset to rInit")
 
         let lo = UnscentedKalmanFilter()
