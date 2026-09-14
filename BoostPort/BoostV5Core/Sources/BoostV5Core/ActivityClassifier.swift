@@ -177,6 +177,31 @@ public enum ActivityClassifier {
     /// Baseline profile percentage (the source only adjusts when `currentProfileSwitch == 100`).
     private static let baselineProfilePercent: Double = 100.0
 
+    /// Minimum readings in the window before a zero-variance run is judged frozen. Below this a
+    /// stuck value cannot be told apart from merely sparse data, so nothing is suppressed.
+    private static let frozenMinReadings = 4
+
+    /// Whether the HR window holds enough readings that are all bit-identical, which is the
+    /// signature of a stuck sensor value rather than a heartbeat: a genuine averaged heart rate
+    /// always has some spread across a fifteen-minute window. Observed as a value pinned at 124 bpm
+    /// all night, which mis-fired resistance on every cycle. (AAPS `isHrWindowFrozen`, 2026-07-16.)
+    ///
+    /// Suppressing is safe-signed. The caller treats a frozen window as no HR signal and falls back
+    /// to step-only classification, which can only withhold an activity or target modifier, never
+    /// add insulin.
+    public static func isHrWindowFrozen(
+        readings: [SleepHrReading],
+        nowMs: Double,
+        windowMinutes: Int
+    ) -> Bool {
+        let cutoff = nowMs - Double(windowMinutes) * 60000
+        let inWindow = readings.filter { $0.isValid && $0.timestampMs > cutoff && $0.timestampMs <= nowMs }
+        guard inWindow.count >= frozenMinReadings else { return false }
+        guard let lo = inWindow.map(\.beatsPerMinute).min(),
+              let hi = inWindow.map(\.beatsPerMinute).max() else { return false }
+        return lo == hi
+    }
+
     // HR-fusion step thresholds (15-min window), from `HrActivityCalculator`.
     private static let steps15HighThreshold = 300 // brisk walk
     private static let steps15ModerateThreshold = 100 // slow walk

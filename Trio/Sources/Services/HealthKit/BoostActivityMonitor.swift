@@ -39,18 +39,18 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
 
     private func d(_ v: Decimal) -> Double { (v as NSDecimalNumber).doubleValue }
 
-    /// Max minutes the learned sleep window may move from the configured night start/end.
-    private static let learnedWindowBandMin = 90
-
-    /// Clamp a learned minute-of-day to within ±band of the configured minute-of-day, on the 24h
-    /// circle; returns `configured` when `learned` is nil. Caps how far the learned sleep window can
-    /// drift from the user's configured times — the safety bound that, with the genuine-wake-only
-    /// training in SleepHistoryTracker, stops the night-window collapse. Mirrors the AAPS plugin.
-    static func clampToConfiguredBand(_ learned: Int?, _ configured: Int, bandMin: Int = learnedWindowBandMin) -> Int {
-        guard let learned else { return configured }
-        let delta = ((learned - configured + 1440 + 720) % 1440) - 720 // signed circular delta [-720,719]
-        let clamped = min(max(delta, -bandMin), bandMin)
-        return ((configured + clamped) % 1440 + 1440) % 1440
+    /// Clamp a learned minute-of-day to within the band around the configured minute-of-day.
+    /// Delegates to `SleepHistoryTracker`, which owns the learned aggregate and is where the
+    /// behaviour is unit-tested.
+    static func clampToConfiguredBand(
+        _ learned: Int?,
+        _ configured: Int,
+        bandMin: Int = SleepHistoryTracker.learnedWindowBandMin,
+        allowEarlier: Bool = true
+    ) -> Int {
+        SleepHistoryTracker.clampToConfiguredBand(
+            learned: learned, configured: configured, bandMin: bandMin, allowEarlier: allowEarlier
+        )
     }
 
     init(resolver: Resolver) {
@@ -165,7 +165,9 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         // preventing the self-reinforcing earlier-every-night collapse. No/insufficient data →
         // effective == configured.
         let effectiveNightStart = Self.clampToConfiguredBand(agg.sleepStartMinAvg, configNightStart)
-        let effectiveNightEnd = Self.clampToConfiguredBand(agg.wakeMinAvg, configNightEnd)
+        // Wake side is one-sided: learning may push the night end later than configured, never
+        // earlier, so protection is never lifted before the configured wake. See the clamp's note.
+        let effectiveNightEnd = Self.clampToConfiguredBand(agg.wakeMinAvg, configNightEnd, allowEarlier: false)
         let effectiveResting = agg.restingHrBpm.map(Double.init) ?? resting
 
         let nowMinute = Calendar.current.component(.hour, from: now) * 60
@@ -219,9 +221,19 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             else { return false }
             return Double(steps60) < d(prefs.boostSleepInSteps)
         }()
+        // Frozen-HR guard (AAPS 220d747d4d). A run of bit-identical readings across the 15-minute
+        // averaging window is a stuck sensor value, not a heartbeat. Trusting a stuck elevated value
+        // mis-fires resistance every cycle. Pass 0, which the classifier already reads as no HR
+        // signal, so it falls back to step-only.
+        let hrFrozen = ActivityClassifier.isHrWindowFrozen(
+            readings: hrReadings, nowMs: nowMs, windowMinutes: 15
+        )
+        if hrFrozen {
+            debug(.service, "Boost activity: HR window frozen at \(avgHr) bpm — treating HR as unavailable")
+        }
         let activity = ActivityClassifier.classify(ActivityInputs(
             steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
-            avgHeartRate: avgHr,
+            avgHeartRate: hrFrozen ? 0 : avgHr,
             inNightWindow: inNightWindow, asleep: inBed, sleepInActive: lieIn,
             thresholds: thresholds
         ))

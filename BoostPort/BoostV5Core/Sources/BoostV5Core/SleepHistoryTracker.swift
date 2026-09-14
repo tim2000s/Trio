@@ -100,6 +100,35 @@ public enum SleepHistoryTracker {
     }
 
     /// Compute aggregates over the rolling window.
+    /// Max minutes the learned sleep window may move from the configured night start or end.
+    public static let learnedWindowBandMin = 90
+
+    /// Clamp a learned minute-of-day to within the band around the configured minute-of-day, on the
+    /// 24 h circle. Returns `configured` when `learned` is nil. This caps how far the learned window
+    /// can drift from the configured times, which together with the genuine-wake-only training below
+    /// is what stops the night window collapsing earlier every night.
+    ///
+    /// `allowEarlier: false` makes the nudge one-sided, so learning may only move the bound later
+    /// than configured (AAPS 4b06282ba7). Used for the night end. The learned wake is a circular
+    /// mean over roughly 40 sessions, and for someone whose real wake varies between 04:30 and 09:30
+    /// that mean sits early: it dragged a configured 07:30 night end down to about 06:00, lifting
+    /// sleep protection two hours before the person's own setting, which is the unsafe direction
+    /// because it opens the dawn window. Real-time HR and step detection still catches a genuine
+    /// early wake. The night start keeps the symmetric band, where later-to-bed drift is expected.
+    public static func clampToConfiguredBand(
+        learned: Int?,
+        configured: Int,
+        bandMin: Int = learnedWindowBandMin,
+        allowEarlier: Bool = true
+    ) -> Int {
+        guard let learned else { return configured }
+        // Signed circular delta in [-720, 719]; positive means the learned time is later.
+        let delta = ((learned - configured + 1440 + 720) % 1440) - 720
+        let loBand = allowEarlier ? -bandMin : 0
+        let clamped = min(max(delta, loBand), bandMin)
+        return ((configured + clamped) % 1440 + 1440) % 1440
+    }
+
     public static func aggregate(_ h: History, localOffsetMs: Double) -> Aggregate {
         let restingHrSamples = h.sessions.compactMap(\.sleepHrP10)
         let daytimeHrSamples = h.sessions.compactMap(\.daytimeHrP10)
