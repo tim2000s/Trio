@@ -24,6 +24,16 @@ public enum DynIsf {
         public static let adjustmentFactorMinPct: Double = 1.0
         public static let adjustmentFactorMaxPct: Double = 300.0
 
+        /// Minimum believable blended TDD, as a fraction of the TDD the person's own profile ISF
+        /// implies through the 1800 rule (AAPS `DYNISF_MIN_TDD_FRACTION`, 2026-07-30). Below this
+        /// the insulin history is treated as incomplete and dynamic ISF is not derived.
+        ///
+        /// 0.35 is deliberately liberal. Falling back is safe-signed: `profileSens` is the value
+        /// the person or their clinician configured, so a false positive costs one cycle of
+        /// dynamic responsiveness, while a false negative paralyses dosing. The field case that
+        /// motivated the guard sat at 0.22 of implied.
+        public static let minTddFractionOfProfileImplied: Double = 0.35
+
         // ---- ISF target formula ----
         /// V1: ISF = 1800 / (TDD * ln(normalTarget/insulinDivisor + 1)).
         /// Boost uses V1 only; the V2 `2300/(…·TDD²·0.02)` formula is intentionally NOT ported
@@ -73,6 +83,27 @@ public enum DynIsf {
     }
 
     // MARK: - ISF target
+
+    /// Whether `tdd` is too low to be believed against what `profileSens` implies, so dynamic ISF
+    /// must not be derived from it (AAPS `tddImplausibleForProfile`, 2026-07-30).
+    ///
+    /// The old condition was `tdd > 0`, which does not ensure a sane ISF: 0.1 U/day passes it and
+    /// 1800/(tdd x logTerm) then explodes. Observed in the field on a cross-fork migration, where a
+    /// fresh database reported 3.1 to 4.1 U/day against a true 20, dynamic ISF reached 5550 to 8944
+    /// mg/dL/U against a profile ISF of 100, insulin requirement computed at or below zero, and the
+    /// loop delivered nothing for 3.5 h while glucose climbed to 276 mg/dL.
+    ///
+    /// The floor is anchored on the profile's own implied TDD rather than a rolling self-reference,
+    /// because a rolling baseline is contaminated by the very failure it has to catch: the field
+    /// case's own median TDD was the broken value. Anchoring on the profile also makes it
+    /// self-scaling, so a person on U200 insulin, a child and a high-TDD adult need no separate
+    /// threshold. A non-positive `profileSens` gives no reference to judge against and returns
+    /// false, leaving the existing `tdd > 0` test to act.
+    public static func tddImplausibleForProfile(tdd: Double, profileSens: Double) -> Bool {
+        guard profileSens > 0 else { return false }
+        let impliedTdd = Const.isfNumeratorV1 / profileSens
+        return tdd < impliedTdd * Const.minTddFractionOfProfileImplied
+    }
 
     /// V1 ISF at normal target: 1800 / (TDD * ln(normalTarget/insulinDivisor + 1)).
     public static func isfTargetV1(

@@ -37,8 +37,14 @@ enum BoostISF {
         let globalScale = profilePercent > 0 ? 100.0 / profilePercent : 1.0
 
         var sensNormalTarget: Double
-        if preferences.boostUseTdd, tddValue > 0 {
-            let tddAdjusted = tddValue * adjFactor / 100.0
+        // Implausible-TDD guard (AAPS 5fc7951452): applied to the ADJUSTED TDD, matching the
+        // Kotlin, which applies the adjustment factor before the guard. Below the floor the
+        // derivation is skipped entirely and the profile ISF stands for this cycle.
+        let tddAdjusted = tddValue * adjFactor / 100.0
+        let tddImplausible = DynIsf.tddImplausibleForProfile(
+            tdd: tddAdjusted, profileSens: dbl(profileSens)
+        )
+        if preferences.boostUseTdd, tddValue > 0, !tddImplausible {
             sensNormalTarget = DynIsf.isfTargetV1(
                 tdd: tddAdjusted,
                 normalTarget: normalTarget,
@@ -102,8 +108,13 @@ enum BoostISF {
         let globalScale = profilePercent > 0 ? 100.0 / profilePercent : 1.0
         let tddValue = dbl(tdd)
         var sens: Double
-        if preferences.boostUseTdd, tddValue > 0 {
-            let tddAdjusted = tddValue * dbl(preferences.boostDynIsfAdjustmentFactor) / 100.0
+        // Same implausible-TDD guard as `adjustedSensitivity`. Both sites must agree, or the
+        // prediction loops would run a derived ISF the dosing path had already rejected.
+        let tddAdjusted = tddValue * dbl(preferences.boostDynIsfAdjustmentFactor) / 100.0
+        let tddImplausible = DynIsf.tddImplausibleForProfile(
+            tdd: tddAdjusted, profileSens: dbl(profileSens)
+        )
+        if preferences.boostUseTdd, tddValue > 0, !tddImplausible {
             sens = DynIsf.isfTargetV1(
                 tdd: tddAdjusted,
                 normalTarget: dbl(preferences.boostDynIsfNormalTarget),
