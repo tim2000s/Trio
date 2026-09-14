@@ -102,6 +102,9 @@ struct MainChartView: View {
     /// Auto-pans the chart while a scrubbing finger rests in the viewport's edge zones.
     @State private var edgePanTask: Task<Void, Never>?
 
+    /// Measured plot rect of the COB/IOB pane (canvas y-coords) for overlay alignment.
+    @State private var cobIobPlotFrame: CGRect = .zero
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             MainChartCanvas(
@@ -162,6 +165,7 @@ struct MainChartView: View {
         )
         .clipped()
         .contentShape(Rectangle())
+        .onPreferenceChange(CobIobPlotFrameKey.self) { cobIobPlotFrame = $0 }
         .simultaneousGesture(panAndInspectGesture)
         .simultaneousGesture(magnifyGesture)
         .simultaneousGesture(TapGesture(count: 2).onEnded { cycleZoomPreset() })
@@ -197,6 +201,36 @@ struct MainChartView: View {
                 mainChartHasInitialized = true
             }
         }
+        // The chart is a custom gesture canvas VoiceOver cannot explore; give it a
+        // spoken summary. (A full AXChartDescriptor audio graph is a follow-up that
+        // needs on-device VoiceOver verification to avoid misrepresenting trends.)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(chartAccessibilitySummary))
+    }
+
+    /// Spoken summary of the visible glucose: latest value and the min–max range.
+    private var chartAccessibilitySummary: String {
+        let visible = state.glucoseFromPersistence.filter { ($0.date ?? .distantPast) >= renderWindowStart }
+        let sample = visible.isEmpty ? state.glucoseFromPersistence : visible
+        guard let latest = sample.last else {
+            return String(localized: "Glucose chart, no data", comment: "Accessibility: empty chart")
+        }
+        let unitLabel = units.spokenValue
+        func format(_ value: Int16) -> String {
+            units == .mgdL ? Decimal(value).description : Decimal(value).formattedAsMmolL
+        }
+        let latestString = format(latest.glucose)
+        let values = sample.map(\.glucose)
+        if let low = values.min(), let high = values.max(), low != high {
+            return String(
+                localized: "Glucose chart. Latest \(latestString) \(unitLabel). Visible range \(format(low)) to \(format(high)).",
+                comment: "Accessibility: chart summary with range"
+            )
+        }
+        return String(
+            localized: "Glucose chart. Latest \(latestString) \(unitLabel).",
+            comment: "Accessibility: chart summary"
+        )
     }
 }
 
@@ -320,7 +354,11 @@ extension MainChartView {
         )
         let span = domain.upperBound - domain.lowerBound
         let fraction = span == 0 ? 0.5 : (value - domain.lowerBound) / span
-        return basalHeight + mainHeight + cobIobHeight * CGFloat(1 - min(max(fraction, 0), 1))
+        // the pane's hour labels reserve space inside the pane frame, so the
+        // plot is shorter than cobIobHeight; map through the measured plot rect
+        let plotTop = cobIobPlotFrame == .zero ? basalHeight + mainHeight : cobIobPlotFrame.minY
+        let plotHeight = cobIobPlotFrame == .zero ? cobIobHeight : cobIobPlotFrame.height
+        return plotTop + plotHeight * CGFloat(1 - min(max(fraction, 0), 1))
     }
 
     /// Dark fade pinned to the trailing edge whenever "now" is scrolled off-screen.
@@ -375,25 +413,30 @@ extension MainChartView {
                     .frame(width: 6, height: 6)
                     .position(x: x, y: glucoseY)
 
-                // Selected COB / (scaled) IOB dots on the bottom pane.
+                // Selected COB / (scaled) IOB dots on the bottom pane, at the
+                // determination's own timestamp: the lookup picks the newest
+                // determination within ±150 s of the scrub point, so drawing its
+                // value at the rule's x floats the dot off the stepped line.
                 if let selectedCOBValue {
+                    let dotX = xPosition(for: selectedCOBValue.deliverAt ?? selectionDate)
                     let y = cobIobYPosition(forChartValue: Double(selectedCOBValue.cob))
                     Circle().fill(Color.orange.opacity(0.8))
                         .frame(width: 15, height: 15)
-                        .position(x: x, y: y)
+                        .position(x: dotX, y: y)
                     Circle().fill(Color.primary)
                         .frame(width: 6, height: 6)
-                        .position(x: x, y: y)
+                        .position(x: dotX, y: y)
                 }
                 if let selectedIOBValue {
+                    let dotX = xPosition(for: selectedIOBValue.deliverAt ?? selectionDate)
                     let scaled = MainChartHelper.scaledIobAmount(selectedIOBValue.iob?.doubleValue ?? 0)
                     let y = cobIobYPosition(forChartValue: scaled)
                     Circle().fill(Color.darkerBlue.opacity(0.8))
                         .frame(width: 15, height: 15)
-                        .position(x: x, y: y)
+                        .position(x: dotX, y: y)
                     Circle().fill(Color.primary)
                         .frame(width: 6, height: 6)
-                        .position(x: x, y: y)
+                        .position(x: dotX, y: y)
                 }
 
                 // Detail card: fixed slot at the top of the glucose pane.
@@ -802,7 +845,7 @@ struct MainChartCanvas: View {
     var glucoseYDomain: ClosedRange<Decimal>
 
     @State var basalProfiles: [BasalProfile] = []
-    @State var preparedTempBasals: [(start: Date, end: Date, rate: Double)] = []
+    @State var preparedTempBasals: [(start: Date, end: Date, rate: Double, isScheduled: Bool)] = []
 
     // Computed (not stored) on purpose: stored properties participate in SwiftUI's
     // change detection, and a stored reference initialized per-init could mark this view
@@ -855,6 +898,10 @@ struct MainChartCanvas: View {
         }
     }
 
+    /// Coordinate space for plot-frame preferences; pane-local plot rects let the
+    /// shell's selection overlay match the charts' real plot areas.
+    static let coordinateSpaceName = "mainChartCanvas"
+
     var body: some View {
         VStack(spacing: 0) {
             basalChart
@@ -862,9 +909,19 @@ struct MainChartCanvas: View {
             cobIobChart
         }
         .frame(width: canvasWidth)
+        .coordinateSpace(name: Self.coordinateSpaceName)
         .onAppear {
             calculateTempBasals()
         }
+    }
+}
+
+/// Plot-area rect of the COB/IOB pane in canvas coordinates (y is offset-independent).
+struct CobIobPlotFrameKey: PreferenceKey {
+    static let defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 
@@ -902,16 +959,6 @@ extension MainChartCanvas {
                 viewContext: context
             )
 
-            GlucoseChartView(
-                glucoseData: glucose,
-                units: state.units,
-                highGlucose: state.highGlucose,
-                lowGlucose: state.lowGlucose,
-                currentGlucoseTarget: state.currentGlucoseTarget,
-                isSmoothingEnabled: state.isSmoothingEnabled,
-                glucoseColorScheme: state.glucoseColorScheme
-            )
-
             InsulinView(
                 glucoseData: glucose,
                 insulinData: insulin,
@@ -936,6 +983,16 @@ extension MainChartCanvas {
                 maxValue: state.maxYAxisValue,
                 forecastDisplayType: state.forecastDisplayType,
                 lastDeterminationDate: state.determinationsFromPersistence.first?.deliverAt ?? .distantPast
+            )
+
+            GlucoseChartView(
+                glucoseData: glucose,
+                units: state.units,
+                highGlucose: state.highGlucose,
+                lowGlucose: state.lowGlucose,
+                currentGlucoseTarget: state.currentGlucoseTarget,
+                isSmoothingEnabled: state.isSmoothingEnabled,
+                glucoseColorScheme: state.glucoseColorScheme
             )
         }
         .frame(width: canvasWidth, height: mainHeight)

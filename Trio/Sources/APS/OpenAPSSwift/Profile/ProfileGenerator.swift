@@ -73,27 +73,20 @@ enum ProfileGenerator {
         preferences: Preferences,
         carbRatios: CarbRatios,
         tempTargets: [TempTarget],
-        model: String,
         clock: Date
     ) throws -> Profile {
-        let model = model.replacingOccurrences(of: "\"", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-
         guard !carbRatios.schedule.isEmpty else {
             throw ProfileError.invalidCarbRatio
         }
 
         var preferences = preferences
-        switch (preferences.curve, preferences.useCustomPeakTime) {
-        case (.rapidActing, true):
-            preferences.insulinPeakTime = max(50, min(preferences.insulinPeakTime, 120))
-        case (.rapidActing, false):
-            preferences.insulinPeakTime = 75
-        case (.ultraRapid, true):
-            preferences.insulinPeakTime = max(35, min(preferences.insulinPeakTime, 100))
-        case (.ultraRapid, false):
-            preferences.insulinPeakTime = 55
-        default:
-            // don't do anything
+        if let peak = IobCalculation.lookupPeak(
+            curve: preferences.curve,
+            useCustomPeakTime: preferences.useCustomPeakTime,
+            insulinPeakTime: preferences.insulinPeakTime
+        ) {
+            preferences.insulinPeakTime = Decimal(peak)
+        } else {
             debug(.openAPS, "don't modify insulin peak time")
         }
 
@@ -105,7 +98,6 @@ enum ProfileGenerator {
             preferences: preferences,
             carbRatios: carbRatios,
             tempTargets: tempTargets,
-            model: model,
             clock: clock
         )
     }
@@ -119,7 +111,6 @@ enum ProfileGenerator {
         preferences: Preferences,
         carbRatios: CarbRatios,
         tempTargets: [TempTarget],
-        model: String,
         clock: Date
     ) throws -> Profile {
         var profile = Profile() // start with the defaults
@@ -137,7 +128,6 @@ enum ProfileGenerator {
         }
         profile.dia = pumpSettings.insulinActionCurve
 
-        profile.model = model
         profile.skipNeutralTemps = preferences.skipNeutralTemps
 
         profile.currentBasal = try Basal.basalLookup(basalProfile, now: clock)
@@ -176,7 +166,12 @@ enum ProfileGenerator {
         profile.minBg = range.minBg?.rounded()
         profile.maxBg = range.maxBg?.rounded()
         // Boost: persist the pre-temp-target base profile target for the night-mode gates.
-        profile.boostBaseTargetMgdl = updatedTargets.baseProfileTargetMgdl?.rounded()
+        // Only when Boost is running: the gates never read it with Boost off, and leaving it nil
+        // keeps the serialised profile byte-identical to stock, so upstream's golden parity
+        // scenarios (which all run stock preferences) still detect real algorithm drift here.
+        if preferences.boostMode != .off {
+            profile.boostBaseTargetMgdl = updatedTargets.baseProfileTargetMgdl?.rounded()
+        }
         // Note: we're using updatedTargets here because in Javascript the bgTargetsLookup
         // function mutates the input, so we want the mutated version in the
         // profile and we need to round the properties

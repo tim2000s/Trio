@@ -26,13 +26,17 @@ extension Home {
         @State var showTreatments = false
         @State var selectedTab: Int = 0
         static let treatmentTabTag = 4
-        @State var showQuickBolusPicker = false
-        @State var showQuickBolusNoHistory = false
+        @State var showQuickPickTreatmentsPicker = false
+        @State var showQuickPickTreatmentsNoHistory = false
         @State var showPumpSelection: Bool = false
         @State var showCGMSelection: Bool = false
+        @State var pendingPump: PumpCatalogEntry?
+        @State var pendingCGM: CGMCatalogEntry?
         @State var showSnoozeSheet: Bool = false
         @State var showManualGlucose: Bool = false
+        @State var showReleaseNotes: Bool = false
         @State var alarmsSnoozeUntil: Date = .distantPast
+        @ObservedObject var releaseNotesService = ReleaseNotesService.shared
         // Pull-down-to-force-loop (see HomeRootView+Refresh.swift)
         @State var pullOffset: CGFloat = 0
         @State var isRefreshArmed = false
@@ -84,7 +88,7 @@ extension Home {
             .frame(height: chartHeight)
             .overlay(alignment: .bottomTrailing) {
                 chartInfoButton
-                    .offset(x: 0, y: -10)
+                    .offset(x: 0, y: -18)
             }
             .overlay(alignment: .topTrailing) {
                 // borderless capsule (not a control); centered in the basal
@@ -96,7 +100,7 @@ extension Home {
                         .foregroundStyle(Color.insulin)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(.ultraThinMaterial))
+                        .glassMaterialFill(Capsule())
                         .frame(height: chartHeight * 0.10)
                         .padding(.trailing, 16)
                 }
@@ -113,13 +117,19 @@ extension Home {
             Button {
                 state.isLegendPresented.toggle()
             } label: {
+                // styled to match the alarm bell pill in the meal row
                 Image(systemName: "info")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(.ultraThinMaterial))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+                    .overlay(
+                        Circle()
+                            .stroke(Color.primary.opacity(0.4), lineWidth: 2)
+                    )
+                    .accessibilityLabel(Text("Chart legend"))
             }
+            .buttonStyle(.plain)
             .contentShape(Circle())
             .padding(.bottom, 6)
             // same trailing inset as the alarm bell in the meal row
@@ -210,6 +220,9 @@ extension Home {
                 configureView()
                 refreshAlarmsSnooze()
             }
+            .task {
+                await releaseNotesService.load()
+            }
             // UserDefaults changes don't invalidate views; refresh on sheet dismissal
             .onChange(of: showSnoozeSheet) {
                 if !showSnoozeSheet { refreshAlarmsSnooze() }
@@ -226,19 +239,26 @@ extension Home {
             .sheet(isPresented: $showSnoozeSheet) {
                 SnoozeAlertsSheetView(resolver: resolver, isPresented: $showSnoozeSheet)
             }
+            .sheet(isPresented: $showReleaseNotes) {
+                if let notes = releaseNotesService.notes {
+                    ReleaseNotesSheetView(notes: notes) {
+                        releaseNotesService.acknowledge()
+                    }
+                }
+            }
             .sheet(isPresented: $showManualGlucose) {
                 ManualGlucoseEntryView(units: state.units, isPresented: $showManualGlucose) { amount in
                     state.addManualGlucose(amount)
                 }
             }
-            // PUMP RELATED
-            .confirmationDialog("Pump Model", isPresented: $showPumpSelection) {
-                Button("Medtronic") { state.addPump(.minimed) }
-                Button("All Omnipod Types") { state.addPump(.omni) }
-                Button("Dana(RS/-i)") { state.addPump(.dana) }
-                Button("Medtrum Nano") { state.addPump(.medtrum) }
-                Button("Pump Simulator") { state.addPump(.simulator) }
-            } message: { Text("Select Pump Model") }
+            // DEVICE SELECTION (pump + CGM)
+            .devicePickers(
+                showPumpSelection: $showPumpSelection,
+                showCGMSelection: $showCGMSelection,
+                pendingPump: $pendingPump,
+                pendingCGM: $pendingCGM,
+                state: state
+            )
             .sheet(isPresented: $state.shouldDisplayPumpSetupSheet) {
                 if let pumpManager = state.provider.apsManager.pumpManager {
                     PumpConfig.PumpSettingsView(
@@ -247,9 +267,9 @@ extension Home {
                         completionDelegate: state,
                         setupDelegate: state
                     )
-                } else {
+                } else if let pumpEntry = state.setupPumpEntry {
                     PumpConfig.PumpSetupView(
-                        pumpType: state.setupPumpType,
+                        pumpEntry: pumpEntry,
                         pumpInitialSettings: state.pumpInitialSettings,
                         bluetoothManager: state.provider.apsManager.bluetoothManager!,
                         completionDelegate: state,
@@ -258,15 +278,9 @@ extension Home {
                 }
             }
             // CGM RELATED
-            .confirmationDialog("CGM Model", isPresented: $showCGMSelection) {
-                cgmSelectionButtons
-            } message: {
-                Text("Select CGM Model")
-            }
             .sheet(isPresented: $state.shouldDisplayCGMSetupSheet) {
                 switch state.cgmCurrent.type {
-                case .enlite,
-                     .nightscout,
+                case .nightscout,
                      .none,
                      .simulator,
                      .xdrip:
@@ -276,6 +290,7 @@ extension Home {
                         cgmCurrent: state.cgmCurrent,
                         deleteCGM: state.deleteCGM
                     )
+                    .environment(settingsSearchHighlight)
                 case .plugin:
                     if let fetchGlucoseManager = state.fetchGlucoseManager,
                        let cgmManager = fetchGlucoseManager.cgmManager,
@@ -319,13 +334,11 @@ extension Home {
                     let carbsRequiredBadge: String? = carbsRequiredBadgeValue
 
                     NavigationStack { mainView() }
-                        .tabItem { Label("", systemImage: "chart.xyaxis.line") }
+                        .tabItem { Label("", systemImage: "chart.xyaxis.line").accessibilityLabel(Text("Main")) }
                         .badge(carbsRequiredBadge).tag(0)
-                        .accessibilityLabel(Text("Main"))
 
                     NavigationStack { History.RootView(resolver: resolver) }
-                        .tabItem { Label("", systemImage: historySFSymbol) }.tag(1)
-                        .accessibilityLabel(Text("History"))
+                        .tabItem { Label("", systemImage: historySFSymbol).accessibilityLabel(Text("History")) }.tag(1)
 
                     Spacer()
                         // nbsp title + empty image: invisible item that still
@@ -342,8 +355,7 @@ extension Home {
                             Label(
                                 "",
                                 systemImage: "slider.horizontal.2.gobackward"
-                            ) }.tag(2)
-                        .accessibilityLabel(Text("Adjustments"))
+                            ).accessibilityLabel(Text("Adjustments")) }.tag(2)
 
                     NavigationStack(path: self.$settingsPath) {
                         Settings.RootView(resolver: resolver) }
@@ -351,8 +363,7 @@ extension Home {
                         .tabItem { Label(
                             "",
                             systemImage: "gear"
-                        ) }.tag(3)
-                        .accessibilityLabel(Text("Settings"))
+                        ).accessibilityLabel(Text("Settings")) }.tag(3)
                 }
                 .tint(Color.tabBar)
 
@@ -402,19 +413,35 @@ extension Home {
                     state.showModal(for: .treatmentView)
                 }
                 .onLongPressGesture(minimumDuration: 0.5) {
-                    guard state.enableQuickBolus else { return }
+                    guard state.enableQuickPickTreatments else { return }
                     let impactHeavy = UIImpactFeedbackGenerator(style: .heavy)
                     impactHeavy.impactOccurred()
                     Task {
-                        await state.loadQuickBolusSuggestions()
-                        if state.quickBolusHistory.isEmpty {
-                            showQuickBolusNoHistory = true
+                        await state.loadQuickPickTreatmentSuggestions()
+                        if state.quickPickBolusSuggestions.isEmpty, state.quickPickCarbSuggestions.isEmpty {
+                            showQuickPickTreatmentsNoHistory = true
                         } else {
-                            showQuickBolusPicker = true
+                            showQuickPickTreatmentsPicker = true
                         }
                     }
                 }
                 .accessibilityLabel(Text("Add Treatment"))
+                .accessibilityAddTraits(.isButton)
+                // the tap/long-press gestures are invisible to VoiceOver; expose both
+                .accessibilityAction {
+                    state.showModal(for: .treatmentView)
+                }
+                .accessibilityAction(named: Text("Quick Pick Treatments")) {
+                    guard state.enableQuickPickTreatments else { return }
+                    Task {
+                        await state.loadQuickPickTreatmentSuggestions()
+                        if state.quickPickBolusSuggestions.isEmpty, state.quickPickCarbSuggestions.isEmpty {
+                            showQuickPickTreatmentsNoHistory = true
+                        } else {
+                            showQuickPickTreatmentsPicker = true
+                        }
+                    }
+                }
         }
 
         private var carbsRequiredBadgeValue: String? {
@@ -492,22 +519,28 @@ extension Home {
                     CustomProgressView(text: String(localized: "Updating IOB...", comment: "Progress text when updating IOB"))
                 }
             }
-            .sheet(isPresented: $showQuickBolusPicker) {
-                QuickPickBolusesView(
-                    suggestions: state.quickBolusHistory,
-                    onEnact: { amount in await state.enactQuickBolus(amount: amount) },
-                    isPresented: $showQuickBolusPicker
+            .sheet(isPresented: $showQuickPickTreatmentsPicker) {
+                QuickPickTreatmentsView(
+                    bolusSuggestions: state.quickPickBolusSuggestions,
+                    carbSuggestions: state.quickPickCarbSuggestions,
+                    onEnact: { bolusAmount, carbAmount in
+                        await state.enactQuickPickTreatment(bolusAmount: bolusAmount, carbAmount: carbAmount)
+                    },
+                    isPresented: $showQuickPickTreatmentsPicker
                 )
             }
             .alert(
-                String(localized: "No bolus history yet", comment: "Alert title when no quick-pick boluses history exists"),
-                isPresented: $showQuickBolusNoHistory
+                String(
+                    localized: "No treatment history yet",
+                    comment: "Alert title when no quick-pick treatments history exists"
+                ),
+                isPresented: $showQuickPickTreatmentsNoHistory
             ) {
                 Button(String(localized: "OK"), role: .cancel) {}
             } message: {
                 Text(String(
-                    localized: "Quick-Pick Boluses learns from your manual boluses over time. Once you've delivered a few boluses, it will suggest amounts based on what you typically enact at this time of day.",
-                    comment: "Alert body explaining that quick-pick boluses history is empty"
+                    localized: "Quick-Pick Treatments learns from your manual boluses and carb entries over time. Once you've logged a few, it will suggest amounts based on what you typically enter at this time of day.",
+                    comment: "Alert body explaining that quick-pick treatments history is empty"
                 ))
             }
         }

@@ -471,6 +471,7 @@ enum DeterminationGenerator {
             carbRatio: forecastResult.adjustedCarbRatio.jsRounded(scale: 1),
             received: false
         )
+        determination.cobProjection = forecastResult.cobProjection
 
         // MARK: - Core dosing logic
 
