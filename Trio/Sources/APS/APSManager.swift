@@ -100,6 +100,7 @@ final class BaseAPSManager: APSManager, Injectable {
     @Injected() private var alertHistoryStorage: AlertHistoryStorage!
     @Injected() private var tempTargetsStorage: TempTargetsStorage!
     @Injected() private var carbsStorage: CarbsStorage!
+    @Injected() private var glucoseStorage: GlucoseStorage!
     @Injected() private var determinationStorage: DeterminationStorage!
     @Injected() private var deviceDataManager: DeviceDataManager!
     @Injected() private var settingsManager: SettingsManager!
@@ -113,8 +114,6 @@ final class BaseAPSManager: APSManager, Injectable {
             lastLoopDateSubject.send(lastLoopDate)
         }
     }
-
-    let privateContext = CoreDataStack.shared.newTaskContext()
 
     private var openAPS: OpenAPS!
 
@@ -170,7 +169,7 @@ final class BaseAPSManager: APSManager, Injectable {
 
     init(resolver: Resolver) {
         injectServices(resolver)
-        openAPS = OpenAPS(storage: storage, tddStorage: tddStorage)
+        openAPS = OpenAPS(storage: storage, tddStorage: tddStorage, glucoseStorage: glucoseStorage, carbsStorage: carbsStorage)
         subscribe()
         lastLoopDateSubject.send(lastLoopDate)
 
@@ -185,7 +184,7 @@ final class BaseAPSManager: APSManager, Injectable {
             if wasParsed {
                 Task {
                     do {
-                        try await openAPS.createProfiles(useJavascriptOref: settings.useJavascriptOref)
+                        try await openAPS.createProfiles()
                     } catch {
                         debug(
                             .apsManager,
@@ -214,10 +213,12 @@ final class BaseAPSManager: APSManager, Injectable {
 
         deviceDataManager.bolusTrigger
             .receive(on: processQueue)
-            .sink { [weak self] bolusing in
-                if bolusing {
+            .sink { [weak self] bolusState in
+                switch bolusState {
+                case .initiating,
+                     .inProgress:
                     self?.createBolusReporter()
-                } else {
+                case .noBolus:
                     self?.clearBolusReporter()
                 }
             }
@@ -361,14 +362,16 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func calculateLoopInterval(loopStartDate: Date) async -> Double? {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "calculateLoopInterval"
         do {
-            return try await privateContext.perform { [weak self] in
+            return try await context.perform { [weak self] in
                 guard let self else { return nil }
                 let requestStats = LoopStatRecord.fetchRequest() as NSFetchRequest<LoopStatRecord>
                 let sortStats = NSSortDescriptor(key: "end", ascending: false)
                 requestStats.sortDescriptors = [sortStats]
                 requestStats.fetchLimit = 1
-                let previousLoop = try self.privateContext.fetch(requestStats)
+                let previousLoop = try context.fetch(requestStats)
 
                 if (previousLoop.first?.end ?? .distantFuture) < loopStartDate {
                     return self.roundDouble(
@@ -434,8 +437,7 @@ final class BaseAPSManager: APSManager, Injectable {
               (autosense.timestamp ?? .distantPast).addingTimeInterval(30.minutes.timeInterval) > Date()
         else {
             let result = try await openAPS.autosense(
-                shouldSmoothGlucose: settingsManager.settings.smoothGlucose,
-                useJavascriptOref: settings.useJavascriptOref
+                shouldSmoothGlucose: settingsManager.settings.smoothGlucose
             )
             return result != nil
         }
@@ -473,14 +475,26 @@ final class BaseAPSManager: APSManager, Injectable {
 
         try await calculateAndStoreTDD()
 
-        // Fetch glucose asynchronously
-        let glucose = try await fetchGlucose(predicate: NSPredicate.predicateForOneHourAgo, fetchLimit: 6)
-
         var invalidGlucoseError: String?
 
-        // Perform the context-related checks and actions
-        let isValidGlucoseData = await privateContext.perform { [weak self] in
+        // Fetch glucose and run validation on the same context to avoid cross-context property access.
+        let validationContext = CoreDataStack.shared.newTaskContext()
+        validationContext.name = "determineBasal.validation"
+
+        let isValidGlucoseData = await validationContext.perform { [weak self] in
             guard let self else { return false }
+
+            let glucose: [GlucoseStored]
+            do {
+                glucose = try self.fetchGlucose(
+                    on: validationContext,
+                    predicate: NSPredicate.predicateForOneHourAgo,
+                    fetchLimit: 6
+                )
+            } catch {
+                debug(.apsManager, "Failed to fetch glucose for validation: \(error)")
+                return false
+            }
 
             guard glucose.count > 2 else {
                 debug(.apsManager, "Not enough glucose data")
@@ -506,7 +520,7 @@ final class BaseAPSManager: APSManager, Injectable {
             let now = Date()
 
             // put profile creation up front since autosens needs it
-            try await openAPS.createProfiles(useJavascriptOref: settings.useJavascriptOref)
+            try await openAPS.createProfiles()
             let currentTemp = try await fetchCurrentTempBasal(date: now)
             _ = try await autosense()
 
@@ -534,17 +548,24 @@ final class BaseAPSManager: APSManager, Injectable {
                BoostComposedFloorGate.shouldRecompute(now: now)
             {
                 let since = now.addingTimeInterval(-14 * 86400)
-                let bgs = try await fetchGlucose(
-                    predicate: NSPredicate(format: "date >= %@", since as NSDate), fetchLimit: 6000
-                )
-                let values = bgs.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+                // dev's `fetchGlucose` is synchronous and context-bound: fetch and read the managed
+                // objects inside the context's own `perform`, returning plain Ints.
+                let floorContext = CoreDataStack.shared.newTaskContext()
+                floorContext.name = "boostComposedFloorGate"
+                let values = try await floorContext.perform {
+                    let bgs = try self.fetchGlucose(
+                        on: floorContext,
+                        predicate: NSPredicate(format: "date >= %@", since as NSDate),
+                        fetchLimit: 6000
+                    )
+                    return bgs.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+                }
                 BoostComposedFloorGate.update(now: now, glucoseValuesMgdl: values)
             }
 
             let determination = try await openAPS.determineBasal(
                 currentTemp: currentTemp,
                 shouldSmoothGlucose: settingsManager.settings.smoothGlucose,
-                useJavascriptOref: settings.useJavascriptOref,
                 clock: now
             )
             iobFileDidUpdate.send(())
@@ -591,7 +612,6 @@ final class BaseAPSManager: APSManager, Injectable {
             return try await openAPS.determineBasal(
                 currentTemp: temp,
                 shouldSmoothGlucose: settingsManager.settings.smoothGlucose,
-                useJavascriptOref: settings.useJavascriptOref,
                 clock: Date(),
                 simulatedCarbsAmount: simulatedCarbsAmount,
                 simulatedBolusAmount: simulatedBolusAmount,
@@ -733,16 +753,19 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func fetchCurrentTempBasal(date: Date) async throws -> TempBasal {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "fetchCurrentTempBasal"
         let results = try await CoreDataStack.shared.fetchEntitiesAsync(
             ofType: PumpEventStored.self,
-            onContext: privateContext,
+            onContext: context,
             predicate: NSPredicate.recentPumpHistory,
             key: "timestamp",
             ascending: false,
-            fetchLimit: 1
+            fetchLimit: 1,
+            relationshipKeyPathsForPrefetching: ["tempBasal"]
         )
 
-        let fetchedTempBasal = await privateContext.perform {
+        let fetchedTempBasal = await context.perform {
             guard let fetchedResults = results as? [PumpEventStored],
                   let tempBasalEvent = fetchedResults.first,
                   let tempBasal = tempBasalEvent.tempBasal,
@@ -807,9 +830,11 @@ final class BaseAPSManager: APSManager, Injectable {
     private func setValues(determinationID: NSManagedObjectID) async throws
         -> (NSDecimalNumber?, TimeInterval?, NSDecimalNumber?)
     {
-        return try await privateContext.perform {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "setValues"
+        return try await context.perform {
             do {
-                let determination = try self.privateContext.existingObject(with: determinationID) as? OrefDetermination
+                let determination = try context.existingObject(with: determinationID) as? OrefDetermination
 
                 let rate = determination?.rate
                 let duration = determination?.duration.flatMap { TimeInterval(truncating: $0) * 60 }
@@ -845,8 +870,10 @@ final class BaseAPSManager: APSManager, Injectable {
                 return
             }
 
-            try await privateContext.perform {
-                guard let determinationUpdated = try self.privateContext
+            let context = CoreDataStack.shared.newTaskContext()
+            context.name = "reportEnacted"
+            try await context.perform {
+                guard let determinationUpdated = try context
                     .existingObject(with: determinationID) as? OrefDetermination
                 else {
                     debug(.apsManager, "Could not find determination object in context")
@@ -857,8 +884,8 @@ final class BaseAPSManager: APSManager, Injectable {
                 determinationUpdated.enacted = wasEnacted
                 determinationUpdated.isUploadedToNS = false
 
-                guard self.privateContext.hasChanges else { return }
-                try self.privateContext.save()
+                guard context.hasChanges else { return }
+                try context.save()
                 debug(.apsManager, "Determination enacted. Enacted: \(wasEnacted)")
             }
         } catch {
@@ -905,8 +932,8 @@ final class BaseAPSManager: APSManager, Injectable {
         return Double(sorted[length / 2])
     }
 
-    /// Computes Time-in-Range statistics. Must be called from inside a
-    /// `privateContext.perform` block — the inner perform was redundant
+    /// Computes Time-in-Range statistics. Must be called from within a
+    /// `perform`/`performAndWait` block on the context that owns `glucose`.
     private func tir(_ glucose: [GlucoseStored]) -> (TIR: Double, hypos: Double, hypers: Double, normal_: Double) {
         let justGlucoseArray = glucose.compactMap({ each in Int(each.glucose as Int16) })
         let totalReadings = justGlucoseArray.count
@@ -1150,16 +1177,28 @@ final class BaseAPSManager: APSManager, Injectable {
         do {
             let since = Date().addingTimeInterval(-14 * 86400)
 
-            // Glycaemia (last 14 days).
-            let glucose = try await fetchGlucose(predicate: NSPredicate(format: "date >= %@", since as NSDate), fetchLimit: 6000)
-            let values = glucose.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+            // Glycaemia (last 14 days). dev's `fetchGlucose` is synchronous and context-bound, so
+            // both the fetch and every read of the returned managed objects happen inside the
+            // context's `perform` block; only plain values cross back out.
+            let glucoseContext = CoreDataStack.shared.newTaskContext()
+            glucoseContext.name = "boostAutoConfigGlucose"
+            let summary: (values: [Int], firstDate: Date)? = try await glucoseContext.perform {
+                let glucose = try self.fetchGlucose(
+                    on: glucoseContext,
+                    predicate: NSPredicate(format: "date >= %@", since as NSDate),
+                    fetchLimit: 6000
+                )
+                let values = glucose.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+                guard !values.isEmpty else { return nil }
+                return (values, glucose.compactMap(\.date).min() ?? since)
+            }
+            guard let summary else { return }
+            let values = summary.values
             let n = values.count
-            guard n > 0 else { return }
             let tbr70 = 100.0 * Double(values.filter { $0 < 70 }.count) / Double(n)
             let sev54 = 100.0 * Double(values.filter { $0 < 54 }.count) / Double(n)
             let meanBg = Double(values.reduce(0, +)) / Double(n)
-            let firstDate = glucose.compactMap(\.date).min() ?? since
-            let daysWithData = max(1, Int(Date().timeIntervalSince(firstDate) / 86400))
+            let daysWithData = max(1, Int(Date().timeIntervalSince(summary.firstDate) / 86400))
 
             // Boluses (last 14 days), split into SMB vs manual.
             let history = (try? await pumpHistoryStorage.getPumpHistory()) ?? []
@@ -1301,25 +1340,26 @@ final class BaseAPSManager: APSManager, Injectable {
         }
     }
 
-    // fetch glucose for time interval
-    func fetchGlucose(predicate: NSPredicate, fetchLimit: Int? = nil, batchSize: Int? = nil) async throws -> [GlucoseStored] {
-        let results = try await CoreDataStack.shared.fetchEntitiesAsync(
+    /// Synchronously fetches glucose on the given context. Must be called from within a `perform`/`performAndWait` block of that context
+    func fetchGlucose(
+        on context: NSManagedObjectContext,
+        predicate: NSPredicate,
+        fetchLimit: Int? = nil,
+        batchSize: Int? = nil
+    ) throws -> [GlucoseStored] {
+        let results = try CoreDataStack.shared.fetchEntities(
             ofType: GlucoseStored.self,
-            onContext: privateContext,
+            onContext: context,
             predicate: predicate,
             key: "date",
             ascending: false,
             fetchLimit: fetchLimit,
             batchSize: batchSize
         )
-
-        return try await privateContext.perform {
-            guard let glucoseResults = results as? [GlucoseStored] else {
-                throw CoreDataError.fetchError(function: #function, file: #file)
-            }
-
-            return glucoseResults
+        guard let glucoseResults = results as? [GlucoseStored] else {
+            throw CoreDataError.fetchError(function: #function, file: #file)
         }
+        return glucoseResults
     }
 
     private func lastLoopForStats() async -> Date? {
@@ -1328,9 +1368,11 @@ final class BaseAPSManager: APSManager, Injectable {
         requestStats.sortDescriptors = [sortStats]
         requestStats.fetchLimit = 1
 
-        return await privateContext.perform {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "lastLoopForStats"
+        return await context.perform {
             do {
-                return try self.privateContext.fetch(requestStats).first?.lastrun
+                return try context.fetch(requestStats).first?.lastrun
             } catch {
                 print(error.localizedDescription)
                 return .distantPast
@@ -1347,9 +1389,11 @@ final class BaseAPSManager: APSManager, Injectable {
         let sortLSR = NSSortDescriptor(key: "start", ascending: false)
         requestLSR.sortDescriptors = [sortLSR]
 
-        return await privateContext.perform {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "loopStats"
+        return await context.perform {
             do {
-                let lsr = try self.privateContext.fetch(requestLSR)
+                let lsr = try context.fetch(requestLSR)
 
                 // Compute LoopStats for 24 hours
                 let oneDayLoops = self.loops(lsr)
@@ -1399,23 +1443,36 @@ final class BaseAPSManager: APSManager, Injectable {
         hbs: Durations,
         variance: Variance
     )? {
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "glucoseForStats"
         do {
-            // Get the Glucose Values
-            let glucose24h = try await fetchGlucose(predicate: NSPredicate.predicateForOneDayAgo, fetchLimit: 288, batchSize: 50)
-            let glucoseOneWeek = try await fetchGlucose(
-                predicate: NSPredicate.predicateForOneWeek,
-                batchSize: 250
-            )
-            let glucoseOneMonth = try await fetchGlucose(
-                predicate: NSPredicate.predicateForOneMonth,
-                batchSize: 500
-            )
-            let glucoseThreeMonths = try await fetchGlucose(
-                predicate: NSPredicate.predicateForThreeMonths,
-                batchSize: 1000
-            )
+            return try await context.perform {
+                // Fetch all windows on the same context so subsequent property access is safe.
+                let glucose24h = try self.fetchGlucose(
+                    on: context,
+                    predicate: NSPredicate.predicateForOneDayAgo,
+                    fetchLimit: 288,
+                    batchSize: 50
+                )
+                let glucoseOneWeek = try self.fetchGlucose(
+                    on: context,
+                    predicate: NSPredicate.predicateForOneWeek,
+                    fetchLimit: 288 * 7,
+                    batchSize: 250
+                )
+                let glucoseOneMonth = try self.fetchGlucose(
+                    on: context,
+                    predicate: NSPredicate.predicateForOneMonth,
+                    fetchLimit: 288 * 7 * 30,
+                    batchSize: 500
+                )
+                let glucoseThreeMonths = try self.fetchGlucose(
+                    on: context,
+                    predicate: NSPredicate.predicateForThreeMonths,
+                    fetchLimit: 288 * 7 * 30 * 3,
+                    batchSize: 1000
+                )
 
-            return await privateContext.perform {
                 let units = self.settingsManager.settings.units
 
                 // First date
@@ -1537,9 +1594,10 @@ final class BaseAPSManager: APSManager, Injectable {
     }
 
     private func loopStats(loopStatRecord: LoopStats) {
-        privateContext.perform { [weak self] in
-            guard let self else { return }
-            let nLS = LoopStatRecord(context: self.privateContext)
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "loopStats.save"
+        context.perform {
+            let nLS = LoopStatRecord(context: context)
             nLS.start = loopStatRecord.start
             nLS.end = loopStatRecord.end ?? Date()
             nLS.loopStatus = loopStatRecord.loopStatus
@@ -1547,8 +1605,8 @@ final class BaseAPSManager: APSManager, Injectable {
             nLS.interval = loopStatRecord.interval ?? 0.0
 
             do {
-                guard self.privateContext.hasChanges else { return }
-                try self.privateContext.save()
+                guard context.hasChanges else { return }
+                try context.save()
             } catch {
                 print(error.localizedDescription)
             }
@@ -1665,6 +1723,10 @@ final class BaseAPSManager: APSManager, Injectable {
     /// Mutations are dispatched onto the queue regardless, so a future
     /// caller from another context (e.g. `cancelBolus`) stays safe.
     private func createBolusReporter() {
+        if bolusReporter != nil {
+            return
+        }
+
         processQueue.async {
             self.bolusReporter = self.pumpManager?.createBolusProgressReporter(reportingOn: self.processQueue)
             self.bolusReporter?.addObserver(self)
@@ -1755,8 +1817,9 @@ extension BaseAPSManager: PumpManagerStatusObserver {
     func pumpManager(_: PumpManager, didUpdate status: PumpManagerStatus, oldStatus _: PumpManagerStatus) {
         let percent = Int((status.pumpBatteryChargeRemaining ?? 1) * 100)
 
-        privateContext.perform { [weak self] in
-            guard let self else { return }
+        let context = CoreDataStack.shared.newTaskContext()
+        context.name = "storeBatteryStatus"
+        context.perform {
             /// only update the last item with the current battery infos instead of saving a new one each time
             let fetchRequest: NSFetchRequest<OpenAPS_Battery> = OpenAPS_Battery.fetchRequest()
             fetchRequest.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
@@ -1764,13 +1827,13 @@ extension BaseAPSManager: PumpManagerStatusObserver {
             fetchRequest.fetchLimit = 1
 
             do {
-                let results = try self.privateContext.fetch(fetchRequest)
+                let results = try context.fetch(fetchRequest)
                 let batteryToStore: OpenAPS_Battery
 
                 if let existingBattery = results.first {
                     batteryToStore = existingBattery
                 } else {
-                    batteryToStore = OpenAPS_Battery(context: self.privateContext)
+                    batteryToStore = OpenAPS_Battery(context: context)
                     batteryToStore.id = UUID()
                 }
 
@@ -1780,8 +1843,8 @@ extension BaseAPSManager: PumpManagerStatusObserver {
                 batteryToStore.status = percent > 10 ? "normal" : "low"
                 batteryToStore.display = status.pumpBatteryChargeRemaining != nil
 
-                guard self.privateContext.hasChanges else { return }
-                try self.privateContext.save()
+                guard context.hasChanges else { return }
+                try context.save()
             } catch {
                 debug(.apsManager, "Failed to fetch or save battery: \(error)")
             }
