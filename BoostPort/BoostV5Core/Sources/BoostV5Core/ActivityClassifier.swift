@@ -207,6 +207,17 @@ public enum ActivityClassifier {
         // Not step-active. Inactivity branch (mirrors `currentProfileSwitch == 100
         // && recentSteps60Min < inactivitySteps`).
         if inputs.steps60 < t.inactivitySteps {
+            // 2026-07-21 safety guard (AAPS 45f17cca5a), the companion to the dead-zone fix in
+            // `fuseHrState`. The inactivity branch adds insulin on the assumption the person is
+            // sedentary, and an elevated heart rate contradicts that assumption whatever the step
+            // count says. Keyed on the Karvonen zone directly rather than the fused state, so it
+            // still holds when the fusion is wrong. Suppresses the profile raise and raises the
+            // target instead.
+            if t.hrIntegrationEnabled,
+               inactivitySuppressedByElevatedHr(avgHr: inputs.avgHeartRate, thresholds: t)
+            {
+                return result(.resistance, profile: baselineProfilePercent, target: resistanceStressTargetBg)
+            }
             // Stress takes precedence over INACTIVE when detection enabled.
             if t.hrStressDetection, hrState == .stress {
                 return result(.stress, profile: baselineProfilePercent, target: resistanceStressTargetBg)
@@ -249,6 +260,15 @@ public enum ActivityClassifier {
         }
     }
 
+    /// Whether the inactivity profile raise must be suppressed because the heart rate says
+    /// exercise (mirrors `HrActivityCalculator.inactivitySuppressedByElevatedHr`). Zone 3 is
+    /// HRR >= 40%, which is exercise range. No HR signal returns false, matching the Kotlin
+    /// null check, so a dark HR feed never suppresses on its own.
+    public static func inactivitySuppressedByElevatedHr(avgHr: Double, thresholds t: ActivityThresholds) -> Bool {
+        guard avgHr > 0 else { return false }
+        return karvonenZone(hr: avgHr, rest: t.hrRestingBpm, max: t.hrMaxBpm) >= 3
+    }
+
     /// HR + step fusion (mirrors `HrActivityCalculator.classify`).
     private static func fuseHrState(avgHr: Double, steps15: Int, thresholds t: ActivityThresholds) -> ExerciseState? {
         // No HR signal → no fused classification.
@@ -272,8 +292,13 @@ public enum ActivityClassifier {
         if !lowSteps, zone <= 2 {
             return .lightAerobic
         }
-        // Resistance: low steps + zone 3–4.
-        if lowSteps, zone >= 3, zone <= 4 {
+        // Resistance / non-step exercise: HR clearly elevated (zone 3–4) with steps below the
+        // MODERATE-aerobic threshold. 2026-07-21 fix (AAPS 45f17cca5a): the condition was
+        // `lowSteps` (< 30), which left a dead zone. 30 to 99 steps at zone 3 or 4 matched no
+        // branch and fell through to resting, so non-step exercise with incidental stepping
+        // classified as resting and the inactivity branch then added insulin. Reported incident:
+        // profile raised to 130% at zone 3 while glucose fell 12 mg/dL per 5 min.
+        if !moderateSteps, zone >= 3, zone <= 4 {
             return .resistance
         }
         // STRESS is intentionally NOT classified — it is dead code in AAPS (the classifier only

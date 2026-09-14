@@ -202,6 +202,73 @@ final class ActivityClassifierTests: XCTestCase {
         XCTAssertEqual(r.targetBgMgdl, 150)
     }
 
+    // MARK: - 2026-07-21 elevated-HR exercise safety (AAPS 45f17cca5a)
+
+    func testDeadZoneStepsWithZone3HrClassifyAsResistance() {
+        // Regression guard for the reported incident. 64 steps sits between the low threshold (30)
+        // and the moderate one (100), so at zone 3 it previously matched no fusion branch, fell
+        // through to resting, and the inactivity branch then added insulin during exercise. The
+        // widened branch must catch it. hr 110 gives (110 - 60) / 120 = 41.7% HRR, zone 3.
+        // steps60 = 600 keeps this off the inactivity path so the fusion result is what is tested.
+        let inputs = ActivityInputs(
+            steps5: 0, steps15: 64, steps30: 0, steps60: 600,
+            avgHeartRate: 110, thresholds: hrThresholds()
+        )
+        let r = ActivityClassifier.classify(inputs)
+        XCTAssertEqual(r.state, .resistance)
+        XCTAssertEqual(r.profilePercent, 100) // profile unchanged: no insulin added
+        XCTAssertEqual(r.targetBgMgdl, 160)
+        XCTAssertTrue(r.exerciseActive)
+    }
+
+    func testInactivitySuppressedByElevatedHrHelper() {
+        let t = hrThresholds()
+        // Zone 3 (110 bpm, 41.7% HRR) and above suppress the inactivity insulin.
+        XCTAssertTrue(ActivityClassifier.inactivitySuppressedByElevatedHr(avgHr: 110, thresholds: t))
+        XCTAssertTrue(ActivityClassifier.inactivitySuppressedByElevatedHr(avgHr: 160, thresholds: t))
+        // Zone 2 (100 bpm, 33.3%) and zone 1 (65 bpm) do not.
+        XCTAssertFalse(ActivityClassifier.inactivitySuppressedByElevatedHr(avgHr: 100, thresholds: t))
+        XCTAssertFalse(ActivityClassifier.inactivitySuppressedByElevatedHr(avgHr: 65, thresholds: t))
+        // No HR signal does not suppress, matching the Kotlin null check.
+        XCTAssertFalse(ActivityClassifier.inactivitySuppressedByElevatedHr(avgHr: 0, thresholds: t))
+    }
+
+    func testInactivityBranchSuppressedWhenHeartRateIsElevated() {
+        // steps60 = 64 is below inactivitySteps (500), so this is the inactivity branch, which
+        // raises the profile to 130% and adds insulin. At zone 3 that must not happen.
+        let elevated = ActivityInputs(
+            steps5: 0, steps15: 64, steps30: 0, steps60: 64,
+            avgHeartRate: 110, thresholds: hrThresholds()
+        )
+        let r = ActivityClassifier.classify(elevated)
+        XCTAssertEqual(r.state, .resistance)
+        XCTAssertEqual(r.profilePercent, 100)
+        XCTAssertEqual(r.targetBgMgdl, 160)
+
+        // Zone 2 on the same steps still takes the inactivity path, so the guard is not blanket.
+        let calm = ActivityInputs(
+            steps5: 0, steps15: 64, steps30: 0, steps60: 64,
+            avgHeartRate: 100, thresholds: hrThresholds()
+        )
+        let c = ActivityClassifier.classify(calm)
+        XCTAssertEqual(c.state, .inactive)
+        XCTAssertEqual(c.profilePercent, 130)
+        XCTAssertNil(c.targetBgMgdl)
+    }
+
+    func testElevatedHrGuardIsInertWhenHrIntegrationDisabled() {
+        // With HR integration off the guard must not fire: step-only behaviour is unchanged.
+        var t = ActivityThresholds()
+        t.hrIntegrationEnabled = false
+        let inputs = ActivityInputs(
+            steps5: 0, steps15: 64, steps30: 0, steps60: 64,
+            avgHeartRate: 110, thresholds: t
+        )
+        let r = ActivityClassifier.classify(inputs)
+        XCTAssertEqual(r.state, .inactive)
+        XCTAssertEqual(r.profilePercent, 130)
+    }
+
     // MARK: - exerciseActive flag coverage
 
     func testExerciseActiveFlagPerState() {
