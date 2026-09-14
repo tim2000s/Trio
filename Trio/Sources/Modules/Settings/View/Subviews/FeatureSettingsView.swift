@@ -64,7 +64,7 @@ struct FeatureSettingsView: BaseView {
                 // Essentials at top level — mirrors the AAPS Boost V6 screen. Everything else is
                 // auto-configured/learned and lives under "Advanced Boost Settings" below.
                 Section(header: Text("Boost V6 Tuning")) {
-                    boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.3, step: 0.05)
+                    boostSlider("Aggression", $state.boostV5Aggression, in: 0.7 ... 1.6, step: 0.05)
                     boostSlider("Hypo Caution", $state.boostV5HypoCaution, in: 1.0 ... 2.0, step: 0.05)
                 }
                 .listRowBackground(Color.chart)

@@ -94,7 +94,7 @@ public enum BoostV5AutoConfig {
         reasons
             .append("HypoCaution \(hypoCaution) (TBR<70 \(pct(p.tbrBelow70Pct)), <54 \(pct(p.timeBelow54Pct)) vs targets 4%/1%)")
 
-        // Aggression [0.7..1.3] — never auto-raised above 1.0
+        // Aggression [0.7..1.6] — never auto-raised above 1.0
         let aggression = round2(
             hypoProne ? 0.85
                 : (p.tbrBelow70Pct > tbr70Target) ? 0.92

@@ -62,7 +62,7 @@ struct Preferences: JSON, Equatable {
     var boostDynIsfAdjustmentFactor: Decimal = 100 // percent
     var boostEnableCircadianIsf: Bool = false
     // V5 tuning knobs (ranges match AAPS).
-    var boostV5Aggression: Decimal = 1.0 // 0.7…1.3 — scales CONFIRMED dose
+    var boostV5Aggression: Decimal = 1.0 // 0.7…1.6 — scales CONFIRMED dose
     var boostV5HypoCaution: Decimal = 1.0 // 1.0…2.0 — deepens ML hypo damping
     var boostV5Sensitivity: Decimal = 1.0 // 0.8…1.2 — budget lever
     var boostV5ConfirmedCapU: Decimal = 2.5 // 0…7.5 U
@@ -493,7 +493,7 @@ extension Preferences: Decodable {
         // UI and feeds the engine directly — for dosing-magnitude caps an out-of-range value must not
         // reach the dosing path.
         if let v = try? container.decode(Decimal.self, forKey: .boostV5Aggression) {
-            preferences.boostV5Aggression = max(0.7, min(1.3, v))
+            preferences.boostV5Aggression = max(0.7, min(1.6, v))
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5HypoCaution) {

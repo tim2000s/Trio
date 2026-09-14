@@ -31,6 +31,21 @@ public enum SafetyGateConstants {
     /// `DetermineBasalBoost.POST_RESCUE_LOW_THRESHOLD_MGDL` (75.0), where the alignment with
     /// V1's Fix A v2 tier guard is load-bearing. Keep in lock-step with AAPS.
     public static let postRescueLowThresholdMgdl = 75.0
+
+    /// Graduated rebound scale as a function of glucose alone: 0.3 below 120 mg/dL, rising
+    /// linearly to 1.0 across 120 to 170, and 1.0 at or above 170, where nothing is suppressed.
+    /// Ports AAPS `DetermineBasalBoost.postRescueReboundScale` (2026-07-23), which shares one
+    /// definition between its in-tier fast-carb scaling and its composed post-rescue guard so the
+    /// two paths cannot diverge in magnitude.
+    ///
+    /// The AAPS guard that consumes this applies it to the final microbolus of the V1 Boost tier
+    /// engine. Trio has no V1 tier engine, so nothing calls this yet; the placement of the Trio
+    /// equivalent is an open decision. Kept here as the single definition of the curve.
+    public static func postRescueReboundScale(bg: Double) -> Double {
+        if bg < 120 { return 0.3 }
+        if bg < 170 { return 0.3 + 0.7 * (bg - 120) / 50 }
+        return 1.0
+    }
 }
 
 public struct Phase3Inputs {

@@ -105,7 +105,7 @@ sizes** (split from pump history), your **time‑below‑range** (% < 70 and % <
 | Setting (range) | Rule |
 |---|---|
 | **HypoCaution** (1.0–2.0) | `clamp(1.0 + max(0, TBR<70% − 4)/4 + max(0, TBR<54% − 1)×0.5, 1.0, 2.0)` |
-| **Aggression** (0.7–1.3) | `0.85` if hypo‑prone (TBR<54% > 1.5 **or** TBR<70% > 6%); `0.92` if TBR<70% > 4%; else **1.0**. Never above 1.0. |
+| **Aggression** (0.7–1.6) | `0.85` if hypo‑prone (TBR<54% > 1.5 **or** TBR<70% > 6%); `0.92` if TBR<70% > 4%; else **1.0**. Never above 1.0. |
 | **Confirmed cap** (0–7.5 U) | `clamp(max(p90 meal boluses, p95 SMBs), 1.5, 7.5)` — the meal‑bolus p90 only participates with **≥ 10 manual boluses** in the window (a percentile of a handful of boluses is noise, not a habit); below that the cap comes from the SMB p95 alone. |
 | **Committed cap** (0–2.5 U) | `clamp(max(p75 SMBs, TDD/40), 0.25, 2.5)` — whichever of the two terms is larger. |
 | **Cumulative SMB cap / 60 min** | `clamp(Confirmed + 2×Committed, 1.0, 10.0)` — one confirm shot plus two holds per hour, clamped only to the preference range. Computed from the **final operative** per‑shot caps (kept‑or‑derived), so a kept user value sizes the hourly budget, not a derivation that never applied. Written to `boostCumulativeSmbCap60Min`; the active override enforces it as the rolling‑60‑min anti‑stacking cap. |

@@ -119,7 +119,7 @@ public enum MealActionMultiplier {
         .idle: 1.0, .observing: 0.3, .confirmed: 1.8, .committed: 1.0, .recovering: 0.4
     ]
 
-    /// Dose fraction for the state. The Aggression knob ∈ [0.7,1.3] scales CONFIRMED only.
+    /// Dose fraction for the state. The Aggression knob ∈ [0.7,1.6] scales CONFIRMED only.
     public static func value(for state: MealHypothesis, aggressionUserKnob: Double = 1.0) -> Double {
         let base = multipliers[state] ?? 1.0
         return state == .confirmed ? base * aggressionUserKnob : base
