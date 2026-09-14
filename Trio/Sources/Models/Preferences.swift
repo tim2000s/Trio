@@ -78,6 +78,16 @@ struct Preferences: JSON, Equatable {
     // rounding mid-meal doses to zero. PER-USER only — enable only where trailing-14d TBR<70 < 3.5%
     // AND TBR<54 < 0.8% (the same-day cohort re-review excluded TBR-heavy users). See ComposedFloor.
     var boostV5ComposedFloorActive: Bool = false
+    /// Aggressive early confirm (AAPS `ApsBoostV5AggressiveEarlyConfirm`). Opt-in and auto-config
+    /// managed: the sustained-score early-confirm path opens one cycle earlier again. About 28% of
+    /// its candidates are fizzle-catches, so it delivers new insulin at roughly the base rate and
+    /// is not a cohort default.
+    var boostV5AggressiveEarlyConfirm: Bool = false
+    /// Velocity-budget floor (AAPS `ApsBoostV5VelocityBudgetActive`). Opt-in and auto-config
+    /// managed: on the budget-near-zero high tail it delivers a bounded hold where the base engine
+    /// doses about zero. Gated by the same fail-closed 14-day time-below-range test as the composed
+    /// floor, and by every Phase-3 hard gate and seam guard.
+    var boostV5VelocityBudgetActive: Bool = false
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
     // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
@@ -205,6 +215,8 @@ extension Preferences {
         case boostCumulativeSmbCap60Min
         case boostV5FastCarbConfirm
         case boostV5ComposedFloorActive
+        case boostV5AggressiveEarlyConfirm
+        case boostV5VelocityBudgetActive
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
@@ -533,6 +545,14 @@ extension Preferences: Decodable {
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5ComposedFloorActive) {
             preferences.boostV5ComposedFloorActive = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5AggressiveEarlyConfirm) {
+            preferences.boostV5AggressiveEarlyConfirm = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5VelocityBudgetActive) {
+            preferences.boostV5VelocityBudgetActive = v
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v

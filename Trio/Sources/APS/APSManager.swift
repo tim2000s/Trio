@@ -1120,7 +1120,9 @@ final class BaseAPSManager: APSManager, Injectable {
         case .confirmedCapU: return dbl(p.boostV5ConfirmedCapU)
         case .committedCapU: return dbl(p.boostV5CommittedCapU)
         case .cumulativeSmbCap60Min: return dbl(p.boostCumulativeSmbCap60Min)
-        case .fastCarbConfirm: return 0 // boolean knob — handled separately by the caller
+        case .aggressiveEarlyConfirm,
+             .fastCarbConfirm,
+             .velocityBudgetFloor: return 0 // boolean knobs — handled separately by the caller
         }
     }
 
@@ -1138,6 +1140,10 @@ final class BaseAPSManager: APSManager, Injectable {
         switch knob {
         case .fastCarbConfirm:
             return p.boostV5FastCarbConfirm != stock.boostV5FastCarbConfirm
+        case .aggressiveEarlyConfirm:
+            return p.boostV5AggressiveEarlyConfirm != stock.boostV5AggressiveEarlyConfirm
+        case .velocityBudgetFloor:
+            return p.boostV5VelocityBudgetActive != stock.boostV5VelocityBudgetActive
         case .confirmedCapU where p.boostV5ConfirmedCapUUserSet,
              .committedCapU where p.boostV5CommittedCapUUserSet,
              .cumulativeSmbCap60Min where p.boostCumulativeSmbCap60MinUserSet:
@@ -1319,7 +1325,9 @@ final class BaseAPSManager: APSManager, Injectable {
                     case .confirmedCapU: prefs.boostV5ConfirmedCapU = Decimal(value)
                     case .committedCapU: prefs.boostV5CommittedCapU = Decimal(value)
                     case .cumulativeSmbCap60Min: prefs.boostCumulativeSmbCap60Min = Decimal(value)
-                    case .fastCarbConfirm: break // boolean knob handled below
+                    case .aggressiveEarlyConfirm,
+                         .fastCarbConfirm,
+                         .velocityBudgetFloor: break // boolean knobs handled below
                     }
                 },
                 markResolved: markResolved
@@ -1336,6 +1344,29 @@ final class BaseAPSManager: APSManager, Injectable {
                 }
                 markResolved(.fastCarbConfirm)
             }
+            // 2026-07-17 (AAPS 3ea7479572): the two insulin-adding switches follow the same
+            // once-only boolean resolution, applied while the preference still sits at its factory
+            // default and marked resolved either way. They derive from the strict well-controlled
+            // cut rather than the hypo-prone one, so a user the data does not clear gets neither.
+            var booleanApplied: [String] = fastCarbApplied.map { [$0] } ?? []
+            if !resolved(.aggressiveEarlyConfirm) {
+                if prefs.boostV5AggressiveEarlyConfirm == stock.boostV5AggressiveEarlyConfirm {
+                    prefs.boostV5AggressiveEarlyConfirm = s.aggressiveEarlyConfirm
+                    if s.aggressiveEarlyConfirm != stock.boostV5AggressiveEarlyConfirm {
+                        booleanApplied.append("aggressiveEarlyConfirm=\(s.aggressiveEarlyConfirm)")
+                    }
+                }
+                markResolved(.aggressiveEarlyConfirm)
+            }
+            if !resolved(.velocityBudgetFloor) {
+                if prefs.boostV5VelocityBudgetActive == stock.boostV5VelocityBudgetActive {
+                    prefs.boostV5VelocityBudgetActive = s.velocityBudgetFloor
+                    if s.velocityBudgetFloor != stock.boostV5VelocityBudgetActive {
+                        booleanApplied.append("velocityBudgetFloor=\(s.velocityBudgetFloor)")
+                    }
+                }
+                markResolved(.velocityBudgetFloor)
+            }
             settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
 
             // Log every classification verbatim so field diagnosis never needs inference
@@ -1344,7 +1375,7 @@ final class BaseAPSManager: APSManager, Injectable {
                 debug(.apsManager, "BoostV5 auto-config: \(r.knob.rawValue) → \(r.reason)")
             }
             let applied = resolutions.filter { $0.outcome == .applied }
-                .map { "\($0.knob.rawValue)=\($0.suggestedValue)" } + (fastCarbApplied.map { [$0] } ?? [])
+                .map { "\($0.knob.rawValue)=\($0.suggestedValue)" } + booleanApplied
             debug(.apsManager, "BoostV5 auto-config applied \(applied) from \(daysWithData)d history: \(s.rationale)")
 
             // Surface a user notification only when something actually changed or a cap raise was

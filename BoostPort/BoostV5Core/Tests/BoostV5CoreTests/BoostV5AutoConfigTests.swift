@@ -157,7 +157,9 @@ final class BoostV5AutoConfigTests: XCTestCase {
         case .confirmedCapU: return 2.5
         case .committedCapU: return 0.5
         case .cumulativeSmbCap60Min: return 10.0
-        case .fastCarbConfirm: return 0
+        case .aggressiveEarlyConfirm,
+             .fastCarbConfirm,
+             .velocityBudgetFloor: return 0 // boolean knobs, handled by the host
         }
     }
 
@@ -405,7 +407,10 @@ final class BoostV5AutoConfigTests: XCTestCase {
             confirmedCapU: 7.0, committedCapU: 2.0,
             cumulativeSmbCap60MinU: s.cumulativeSmbCap60MinU,
             maxIobU: s.maxIobU, bolusCapU: s.bolusCapU,
-            fastCarbConfirm: s.fastCarbConfirm, rationale: s.rationale
+            fastCarbConfirm: s.fastCarbConfirm,
+            aggressiveEarlyConfirm: s.aggressiveEarlyConfirm,
+            velocityBudgetFloor: s.velocityBudgetFloor,
+            rationale: s.rationale
         )
         let resAgain = f.apply(rederived, tbr: safeTbr)
         XCTAssertTrue(resAgain.isEmpty)

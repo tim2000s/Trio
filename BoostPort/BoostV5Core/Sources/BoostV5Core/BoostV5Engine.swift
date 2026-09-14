@@ -30,6 +30,10 @@ public struct V5Inputs {
     public var inPostExerciseWindow: Bool
     public var asleep: Bool
     public var fastCarbConfirmEnabled: Bool
+    /// Aggressive early-confirm opt-in (AAPS `ApsBoostV5AggressiveEarlyConfirm`, auto-config
+    /// managed). Shaves the sustained-score early-confirm path one more cycle. False keeps the
+    /// audit-validated timing. See `MealHypothesisConstants.confirmMinObservingAgeScoreReadyAggressive`.
+    public var aggressiveEarlyConfirmEnabled: Bool
     public var sensorQualityOk: Bool
     /// True when inside the post-rescue window (rolling 45-min CGM low < 75 mg/dL — same source and
     /// threshold as the override seam's post-rescue cap). Gates the composed floor off (both the
@@ -46,6 +50,12 @@ public struct V5Inputs {
     /// untouched. True = the delivered dose is floored at the composed-floor target on qualifying
     /// cycles (see decide()). Per-user activation only — TBR-gated by guidance. 2026-07, AAPS 730b3dcb2c.
     public var composedFloorActive: Bool
+    /// Velocity-budget floor activation (AAPS `ApsBoostV5VelocityBudgetActive`, and V6 the active
+    /// doser, and the fail-closed 14-day TBR gate). False is shadow: `velocityBudgetWouldAdd`
+    /// records what the floor would add and the delivered dose is untouched. True floors the
+    /// delivered dose on qualifying cycles and flags `velocityBudgetExempt`, which the override
+    /// seam reads so the hold may out-dose the base engine. Per-user opt-in only.
+    public var velocityBudgetActive: Bool
     // Reset triggers
     public var profileSwitched: Bool
     public var pumpDisconnected: Bool
@@ -65,8 +75,10 @@ public struct V5Inputs {
         enableSmbPreChecks: Bool, mlHypoRisk: Double? = nil, mlMealLikely: Double? = nil,
         riskAtProjectedIob: ((Double) -> Double)? = nil, recentLowBg: Double, cumulativeRise30min: Double,
         hour: Int, exerciseActive: Bool, inPostExerciseWindow: Bool, asleep: Bool = false,
-        fastCarbConfirmEnabled: Bool = false, sensorQualityOk: Bool = true,
+        fastCarbConfirmEnabled: Bool = false, aggressiveEarlyConfirmEnabled: Bool = false,
+        sensorQualityOk: Bool = true,
         postRescueWindow: Bool = false, v1WouldDoseU: Double? = nil, composedFloorActive: Bool = false,
+        velocityBudgetActive: Bool = false,
         profileSwitched: Bool = false,
         pumpDisconnected: Bool = false, loopSuspended: Bool = false, timeJumpMinutes: Double = 0.0,
         aggressionUserKnob: Double = 1.0, hypoCautionUserKnob: Double = 1.0, sensitivityUserKnob: Double = 1.0,
@@ -102,6 +114,8 @@ public struct V5Inputs {
         self.postRescueWindow = postRescueWindow
         self.v1WouldDoseU = v1WouldDoseU
         self.composedFloorActive = composedFloorActive
+        self.aggressiveEarlyConfirmEnabled = aggressiveEarlyConfirmEnabled
+        self.velocityBudgetActive = velocityBudgetActive
         self.profileSwitched = profileSwitched
         self.pumpDisconnected = pumpDisconnected
         self.loopSuspended = loopSuspended
@@ -167,6 +181,15 @@ public struct V5Decision {
     ///    what-unfloored-would-have-delivered); 0.0 when no uplift.
     /// See `ComposedFloor.targetDose`. 2026-07-06/07, AAPS e0f18ddd0e + 730b3dcb2c.
     public let floorWouldAdd: Double?
+    /// Velocity-budget floor telemetry, with the same dual semantics as `floorWouldAdd` and keyed
+    /// on `V5Inputs.velocityBudgetActive`. Nil when the floor's conditions are unmet either way.
+    /// Shadow records the extra units the floor would add; active records the uplift applied.
+    public let velocityBudgetWouldAdd: Double?
+    /// True only when the active velocity-budget floor lifted the delivered dose. The override seam
+    /// reads it to exempt the cycle from the non-meal cap, because this floor doses precisely when
+    /// the base engine doses about zero. The exempt dose is bounded by the committed cap and the
+    /// remaining IOB headroom.
+    public let velocityBudgetExempt: Bool
     public let newPersistedState: V5PersistedState
 }
 
@@ -236,7 +259,8 @@ public enum BoostV5Engine {
                 inputs.fastCarbConfirmEnabled, recentLowBg: inputs.recentLowBg
             ),
             confirmDoseAdequate: confirmDoseAdequate,
-            scoreReadyStreak: scoreReadyStreak // 2026-07-03 sustained-score early confirm (hoisted above)
+            scoreReadyStreak: scoreReadyStreak, // 2026-07-03 sustained-score early confirm (hoisted above)
+            aggressiveEarlyConfirm: inputs.aggressiveEarlyConfirmEnabled // 2026-07-17 opt-in, one cycle earlier
         )
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
@@ -276,7 +300,7 @@ public enum BoostV5Engine {
             v1WouldDoseU: inputs.v1WouldDoseU,
             hardGateFired: phase3.reductions.hardGateFired != nil
         )
-        let finalDose: Double
+        var finalDose: Double
         let floorWouldAdd: Double?
         if !inputs.composedFloorActive {
             // SHADOW (toggle OFF, or V6 not the active doser) — zero dosing-path effect; the field
@@ -300,12 +324,58 @@ public enum BoostV5Engine {
             floorWouldAdd = floorTarget.map { _ in finalDose - phase3.finalDose }
         }
 
+        // Velocity-budget floor (AAPS 3ea7479572), for the budget-near-zero high tail: cycles where
+        // the base engine's insulin requirement is at or below zero, so the model says covered, while
+        // the person sits high. That is broadly the population the composed floor leaves out, since
+        // it requires a positive budget.
+        //
+        // The AAPS comment states the two floors are mutually exclusive by the budget condition.
+        // They are not, quite: the composed floor needs budget > 0 and this one needs budget <= 0.01,
+        // so both fire in the band (0, 0.01]. The delivered dose is unaffected, being the larger of
+        // the two and bounded by the committed cap either way, which is what AAPS delivers too. The
+        // uplift below is therefore measured against the dose entering this block rather than
+        // against phase3.finalDose, so a cycle where both fired does not report the composed floor's
+        // contribution as this floor's. AAPS measures against phase3.finalDose and over-reports in
+        // that band; the field is internal here, so the difference is telemetry only.
+        let vbTarget = VelocityBudgetFloor.targetDose(
+            state: newHypothesisState.state,
+            bg: inputs.bg,
+            budgetU: budget.budget,
+            committedCapU: inputs.committedCapU,
+            asleep: inputs.asleep,
+            postRescueWindow: inputs.postRescueWindow,
+            hardGateFired: phase3.reductions.hardGateFired != nil
+        )
+        let doseBeforeVelocityBudget = finalDose
+        let velocityBudgetWouldAdd: Double?
+        var velocityBudgetExempt = false
+        if !inputs.velocityBudgetActive {
+            // Shadow: record what the floor would add, deliver nothing extra.
+            velocityBudgetWouldAdd = vbTarget.map { max(0.0, $0 - doseBeforeVelocityBudget) }
+        } else {
+            // The dynamic spike cap is deliberately not applied here. It is 2.5 times the base
+            // insulin requirement, which is about zero on this tail, so applying it would zero the
+            // floor. Exposure is bounded instead by the committed cap inside the target and by the
+            // remaining IOB headroom here.
+            let deliverable: Double = vbTarget.map { target in
+                var f = min(target, max(0.0, inputs.maxIob - inputs.iob))
+                if inputs.roundSmbTo > 0.0 { f = floor(f / inputs.roundSmbTo + 1E-9) * inputs.roundSmbTo }
+                return max(0.0, f)
+            } ?? 0.0
+            let lifted = max(finalDose, deliverable)
+            velocityBudgetExempt = vbTarget != nil && lifted > finalDose
+            finalDose = lifted
+            velocityBudgetWouldAdd = vbTarget.map { _ in finalDose - doseBeforeVelocityBudget }
+        }
+
         return V5Decision(
             finalDose: finalDose, score: scoreResult.score, scoreComponents: scoreResult.components,
             mlWeightsRenormalized: scoreResult.mlWeightsRenormalized, mealHypothesis: newHypothesisState.state,
             mealHypothesisAge: newHypothesisState.ageCycles, stateReset: didReset, aggressionBudget: budget,
             actionMultiplier: actionMult, insulinToDeliver: insulinToDeliver, phase3: phase3,
             floorWouldAdd: floorWouldAdd,
+            velocityBudgetWouldAdd: velocityBudgetWouldAdd,
+            velocityBudgetExempt: velocityBudgetExempt,
             newPersistedState: V5PersistedState(
                 mealHypothesis: newHypothesisState,
                 mlMealLikelyNullStreak: nextNullStreak,
@@ -335,6 +405,54 @@ public enum BoostV5Engine {
 /// 9110ef2520 + 8b492a08e7): the floor may only engage while trailing-14d TBR<63 < 2.0% AND
 /// TBR<70 < 3.5% (`allowedByTbr`, fail-closed). The host computes those from a throttled 14d BG
 /// scan and ANDs the result into `V5Inputs.composedFloorActive`.
+/// Velocity-budget floor (AAPS 2026-07-17), for the budget-near-zero high tail.
+///
+/// It addresses cycles where the base engine's insulin requirement is at or below zero, meaning the
+/// model says the person is covered, while they sit high. The composed floor deliberately excludes
+/// that population because it requires a positive budget.
+///
+/// This floor is unique in that a delivered dose must out-dose the base engine in a non-meal state,
+/// since the base engine also doses about zero when its requirement is at or below zero. The caller
+/// therefore flags the cycle exempt from the override seam's non-meal cap. The exemption is bounded
+/// by construction: the target is capped at the committed cap, the floor requires the person to be
+/// awake and outside the post-rescue window, and the cumulative 60-minute, boost-active and sleep
+/// gates at the seam all still run.
+enum VelocityBudgetFloor {
+    /// Glucose must exceed this, mg/dL. Higher than the composed floor's 160, because this floor
+    /// doses when the base requirement is about zero, so it is confined to a genuinely high value.
+    static let minBgMgdl = 180.0
+    /// A budget at or below this, in units, means the base engine considers the person covered.
+    /// The composed floor requires a positive budget, so the two floors cannot both fire.
+    static let maxBudgetU = 0.01
+    /// The tier-equivalent hold, in units, before the committed-cap and IOB-headroom bounds. It is
+    /// about the per-cycle velocity-tier addition the base engine drops to zero on this tail.
+    static let tierU = 0.5
+
+    /// Target dose in units, or nil when the conditions are unmet. A returned 0.0 means a Phase-3
+    /// hard gate fired, which is distinct from nil and keeps the telemetry honest about why.
+    /// RECOVERING is excluded, matching the rejected pattern of dosing during recovery, and the
+    /// floor keys on a sustained high rather than a sharp rise: in the sizing work the rising
+    /// sub-cell ran at 10.7% pre-low against 4.3% for the sustained one.
+    static func targetDose(
+        state: MealHypothesis,
+        bg: Double,
+        budgetU: Double,
+        committedCapU: Double,
+        asleep: Bool,
+        postRescueWindow: Bool,
+        hardGateFired: Bool
+    ) -> Double? {
+        let conditionsMet = state != .recovering
+            && bg > minBgMgdl
+            && budgetU <= maxBudgetU
+            && !asleep
+            && !postRescueWindow
+        guard conditionsMet else { return nil }
+        if hardGateFired { return 0.0 }
+        return min(tierU, committedCapU)
+    }
+}
+
 enum ComposedFloor {
     /// Floor fraction of the (mlHypoRisk-damped) AggressionBudget the composed multiplier stack may
     /// not push the dose below on a meal-session high cycle.

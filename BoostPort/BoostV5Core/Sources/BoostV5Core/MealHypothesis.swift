@@ -50,6 +50,16 @@ public enum MealHypothesisConstants {
     /// the CURRENT score ≥ threshold (not just the tracked max) because the whole point is a
     /// sustained-ready score, not a transient peak.
     public static let confirmMinObservingAgeScoreReady = confirmMinObservingAge - 1
+
+    /// Aggressive early confirm (AAPS 3ea7479572, "confirm sooner"): one cycle earlier again, so a
+    /// meal whose score is confirm-strength on two consecutive cycles confirms as soon as it enters
+    /// OBSERVING. It still moves the same commit shot rather than adding one, with the same
+    /// streak protection, but the pre-push backtest found about 28% of its candidates are
+    /// fizzle-catches, meaning episodes that would have fallen back to IDLE, so it delivers new
+    /// insulin at roughly the base rate. That is not a clean cohort default, so it is opt-in and
+    /// auto-config managed, enabled only for clearly well-controlled users. False keeps the
+    /// audit-validated timing above, which was priced at 0.0 percentage points of harm.
+    public static let confirmMinObservingAgeScoreReadyAggressive = confirmMinObservingAge - 2
     /// 2026-07-02 dose-adequacy gate: the confirm floor is committedCapU, clamped to at most this
     /// fraction of confirmedCapU so a manual committedCap ≥ confirmedCap can't make the gate
     /// unsatisfiable (which would silently disable V6's meal response). See BoostV5Engine.decide().
@@ -127,7 +137,10 @@ public enum MealHypothesisEngine {
         score: Double,
         eventualBg: Double,
         targetBg: Double,
-        scoreReadyStreak: Bool = false
+        scoreReadyStreak: Bool = false,
+        /// Opens the sustained-score path one cycle earlier again. Opt-in and auto-config managed;
+        /// see `confirmMinObservingAgeScoreReadyAggressive`.
+        aggressiveEarlyConfirm: Bool = false
     ) -> Bool {
         let C = MealHypothesisConstants.self
         if current.state != .observing || current.committedInSession { return false }
@@ -138,8 +151,11 @@ public enum MealHypothesisEngine {
         // BOTH this cycle and the previous one (see confirmMinObservingAgeScoreReady). The early
         // path checks the CURRENT score, not the tracked max — a sustained-ready score, not a
         // transient peak, is what justifies shaving the hysteresis.
+        let scoreReadyFloor = aggressiveEarlyConfirm
+            ? C.confirmMinObservingAgeScoreReadyAggressive
+            : C.confirmMinObservingAgeScoreReady
         let ageEligible = age >= C.confirmMinObservingAge ||
-            (age >= C.confirmMinObservingAgeScoreReady && score >= C.confirmScore && scoreReadyStreak)
+            (age >= scoreReadyFloor && score >= C.confirmScore && scoreReadyStreak)
         return ageEligible && newMaxScore >= C.confirmScore && newMaxOffset >= C.confirmEventualBgOffsetMgdl
     }
 
@@ -165,7 +181,10 @@ public enum MealHypothesisEngine {
         // score (cross-cycle input, same pattern as deltaDeclining). With the CURRENT score also
         // ≥ confirmScore, the age gate opens one cycle early (confirmMinObservingAgeScoreReady).
         // Defaults false = legacy timing for all existing callers/tests.
-        scoreReadyStreak: Bool = false
+        scoreReadyStreak: Bool = false,
+        /// Aggressive early-confirm opt-in (auto-config managed). False keeps the audit-validated
+        /// timing for every existing caller.
+        aggressiveEarlyConfirm: Bool = false
     ) -> MealHypothesisState {
         let C = MealHypothesisConstants.self
         let state = current.state
@@ -204,7 +223,8 @@ public enum MealHypothesisEngine {
             // from the dosing decision. (AAPS 242a6e179d.)
             let confirmEligible = confirmEligibleExceptDoseGate(
                 current: current, score: score, eventualBg: eventualBg, targetBg: targetBg,
-                scoreReadyStreak: scoreReadyStreak
+                scoreReadyStreak: scoreReadyStreak,
+                aggressiveEarlyConfirm: aggressiveEarlyConfirm
             ) && confirmDoseAdequate // 2026-07-02: don't spend the token on a shot < one COMMITTED hold
             if fastConfirm, !committedInSession {
                 return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)

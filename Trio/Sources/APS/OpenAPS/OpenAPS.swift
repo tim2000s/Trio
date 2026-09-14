@@ -794,7 +794,9 @@ final class OpenAPS {
                     confirmedCapU: (preferences.boostV5ConfirmedCapU as NSDecimalNumber).doubleValue,
                     committedCapU: (preferences.boostV5CommittedCapU as NSDecimalNumber).doubleValue,
                     fastCarbConfirm: preferences.boostV5FastCarbConfirm,
-                    composedFloorActive: preferences.boostV5ComposedFloorActive
+                    composedFloorActive: preferences.boostV5ComposedFloorActive,
+                    aggressiveEarlyConfirm: preferences.boostV5AggressiveEarlyConfirm,
+                    velocityBudgetActive: preferences.boostV5VelocityBudgetActive
                 ),
                 clock: clock,
                 recentSmbUnits60m: recentSmb60,
@@ -835,8 +837,16 @@ final class OpenAPS {
                     // would-dose makes IDLE match its spec ("standard oref dose"); genuine meal
                     // rises still get full V6 dosing via OBSERVING→CONFIRMED.
                     let v1WouldDose = det.units ?? 0
+                    // 2026-07-17 velocity-budget exemption (AAPS 3ea7479572): when the active
+                    // velocity-budget floor lifted this cycle's dose, treat it as a meal state so the
+                    // floored hold can out-dose the base engine on the budget-near-zero high tail,
+                    // where the base engine doses about zero. Bounded by construction: the exempt
+                    // dose is capped at the committed cap and the remaining IOB headroom, the floor
+                    // requires the person to be awake and outside the post-rescue window, and the
+                    // cumulative 60-minute, boost-active and sleep gates below all still run.
                     let inMealState = result.decision.mealHypothesis == .confirmed
                         || result.decision.mealHypothesis == .committed
+                        || result.decision.velocityBudgetExempt
 
                     // Post-rescue meal-state cap (2026-07-04, faithful port of AAPS
                     // c306241a35 / OpenAPSBoostPlugin.applyV6OverrideCaps): inside the

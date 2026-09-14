@@ -117,6 +117,8 @@ struct FeatureSettingsView: BaseView {
                 }
                 Toggle("Fast-carb confirm", isOn: $state.boostV5FastCarbConfirm)
                 Toggle("Phase-3 composed brake floor", isOn: $state.boostV5ComposedFloorActive)
+                Toggle("Confirm sooner", isOn: $state.boostV5AggressiveEarlyConfirm)
+                Toggle("Velocity-budget floor", isOn: $state.boostV5VelocityBudgetActive)
             }
             .listRowBackground(Color.chart)
 

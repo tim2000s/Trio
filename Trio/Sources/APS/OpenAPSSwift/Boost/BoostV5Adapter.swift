@@ -57,6 +57,12 @@ enum BoostV5Adapter {
         // 2026-07 composed brake-floor toggle (boostV5ComposedFloorActive). Per-user activation,
         // default OFF — see ComposedFloor. Only takes effect when mode == .active (V6 the doser).
         var composedFloorActive: Bool = false
+        /// 2026-07-17 aggressive early confirm (boostV5AggressiveEarlyConfirm). Opt-in, default OFF.
+        var aggressiveEarlyConfirm: Bool = false
+        /// 2026-07-17 velocity-budget floor (boostV5VelocityBudgetActive). Opt-in, default OFF; only
+        /// takes effect when mode == .active, under the same fail-closed 14-day TBR gate as the
+        /// composed floor.
+        var velocityBudgetActive: Bool = false
     }
 
     static func run(
@@ -230,6 +236,9 @@ enum BoostV5Adapter {
                 // fastCarbConfirmEnabled must appear before postRescueWindow to match the V5Inputs
                 // initializer's parameter order.
                 fastCarbConfirmEnabled: knobs.fastCarbConfirm,
+                // 2026-07-17 aggressive early confirm. Timing only, so it needs no mode gate here:
+                // the whole engine result is discarded in shadow mode.
+                aggressiveEarlyConfirmEnabled: knobs.aggressiveEarlyConfirm,
                 // 2026-07-06/07 composed brake-floor inputs (AAPS e0f18ddd0e + 730b3dcb2c). Computed
                 // here from the SAME sources the override seam uses: post-rescue = rolling 45-min CGM
                 // low < 75 (SafetyGateConstants.postRescueLowThresholdMgdl); v1WouldDose = the base
@@ -243,6 +252,11 @@ enum BoostV5Adapter {
                 // fail-closed (BoostComposedFloorGate, refreshed hourly by APSManager). The floor is
                 // insulin-adding, so it cannot engage for a hypo-prone user even if toggled on.
                 composedFloorActive: mode == .active && knobs.composedFloorActive
+                    && BoostComposedFloorGate.allowed,
+                // 2026-07-17 velocity-budget floor. Insulin-adding like the composed floor, so it
+                // sits behind the same fail-closed per-user hypo gate and the same active-mode
+                // requirement. A hypo-prone user cannot reach it even with the toggle on.
+                velocityBudgetActive: mode == .active && knobs.velocityBudgetActive
                     && BoostComposedFloorGate.allowed,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,

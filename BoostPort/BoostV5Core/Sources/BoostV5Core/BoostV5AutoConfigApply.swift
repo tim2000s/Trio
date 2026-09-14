@@ -12,11 +12,22 @@ public enum BoostAutoConfigKnob: String, CaseIterable, Sendable {
     case committedCapU
     case cumulativeSmbCap60Min
     case fastCarbConfirm
+    /// 2026-07-17 insulin-adding opt-in switches. Auto-config managed on the same once-only
+    /// resolution as `fastCarbConfirm`, but derived from the strict well-controlled cut rather than
+    /// the hypo-prone one.
+    case aggressiveEarlyConfirm
+    case velocityBudgetFloor
 
-    /// The double-valued knobs `applyAutoConfig` resolves (stable order). `fastCarbConfirm` is a
-    /// boolean and is handled separately by the host (as in the AAPS plugin).
+    /// The double-valued knobs `applyAutoConfig` resolves (stable order). The boolean knobs are
+    /// handled separately by the host, as in the AAPS plugin.
     public static let doubleKnobs: [BoostAutoConfigKnob] = [
         .aggression, .hypoCaution, .confirmedCapU, .committedCapU, .cumulativeSmbCap60Min
+    ]
+
+    /// The boolean knobs, which the host applies only while the preference still sits at its
+    /// factory default, then marks resolved either way.
+    public static let booleanKnobs: [BoostAutoConfigKnob] = [
+        .fastCarbConfirm, .aggressiveEarlyConfirm, .velocityBudgetFloor
     ]
 }
 

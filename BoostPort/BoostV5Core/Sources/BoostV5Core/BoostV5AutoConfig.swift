@@ -22,6 +22,17 @@ public enum BoostV5AutoConfig {
     public static let sev54HypoProne = 1.5
     public static let tbr70HypoProne = 6.0
 
+    /// Strict well-controlled cut-points that auto-enable the insulin-adding opt-in switches,
+    /// being aggressive early confirm and the velocity-budget floor (AAPS 2026-07-17). Much tighter
+    /// than the hypo-prone cut above, because these switches deliberately add a little insulin and
+    /// may only auto-engage for someone whose trailing low-glucose exposure is clearly small. The
+    /// pre-push cohort backtest set them: time below 70 under 1.5% and time below 54 under 0.3%
+    /// enabled three of the eight users and excluded the rest. Either switch can still be turned on
+    /// by hand; auto-config only picks a safe default, and the velocity-budget floor additionally
+    /// has a live fail-closed 14-day gate downstream.
+    public static let wellControlledMaxTbr70 = 1.5
+    public static let wellControlledMaxSev54 = 0.3
+
     /// Minimum manual (NORMAL) boluses in the window before their p90 may drive the Confirmed cap.
     /// Backtest evidence (7-user migration cohort, 2026-07-06, AAPS fe9d8a1a13): one user's derived
     /// confirmedCap of 6.8 U rested on a p90 of just FOUR manual boluses — one of them an 8 U
@@ -76,6 +87,9 @@ public enum BoostV5AutoConfig {
         public let maxIobU: Double
         public let bolusCapU: Double
         public let fastCarbConfirm: Bool
+        /// Insulin-adding opt-in switches, enabled only for a clearly well-controlled history.
+        public let aggressiveEarlyConfirm: Bool
+        public let velocityBudgetFloor: Bool
         public let rationale: [String]
     }
 
@@ -126,12 +140,28 @@ public enum BoostV5AutoConfig {
         let fastCarbConfirm = !hypoProne
         if hypoProne { reasons.append("Fast-carb confirm OFF (cautious start — notable hypo history)") }
 
+        // The two insulin-adding switches auto-enable only on the strict cut above, which is tighter
+        // than fastCarbConfirm's test because they add insulin rather than merely reshaping when it
+        // is given. Either can still be set by hand.
+        let wellControlled = p.tbrBelow70Pct < wellControlledMaxTbr70 && p.timeBelow54Pct < wellControlledMaxSev54
+        let aggressiveEarlyConfirm = wellControlled
+        let velocityBudgetFloor = wellControlled
+        reasons.append(
+            wellControlled
+                ? "Confirm sooner + velocity-budget floor ON (low-glucose exposure well within target: "
+                + "<70 \(pct(p.tbrBelow70Pct)), <54 \(pct(p.timeBelow54Pct)))"
+                : "Confirm sooner + velocity-budget floor OFF (enabled only for very low low-glucose exposure)"
+        )
+
         return Suggestion(
             aggression: aggression, hypoCaution: hypoCaution,
             confirmedCapU: confirmedCapU, committedCapU: committedCapU,
             cumulativeSmbCap60MinU: cumulativeSmbCap60MinU,
             maxIobU: maxIobU, bolusCapU: bolusCapU,
-            fastCarbConfirm: fastCarbConfirm, rationale: reasons
+            fastCarbConfirm: fastCarbConfirm,
+            aggressiveEarlyConfirm: aggressiveEarlyConfirm,
+            velocityBudgetFloor: velocityBudgetFloor,
+            rationale: reasons
         )
     }
 
