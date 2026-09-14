@@ -108,6 +108,17 @@ public struct ActivityInputs: Equatable, Sendable {
     /// Duration-weighted average HR over the HR window. `0` (or any value when
     /// HR integration is disabled) means "no HR signal".
     public var avgHeartRate: Double
+    /// Inside the CONFIGURED night window, read regardless of the night-mode enable flag
+    /// (AAPS `NightWindow.contains`, 2026-07-31). The start and end times state when this person
+    /// is overnight, which is a fact about them; the enable flag states whether Boost should dose
+    /// overnight, which is a policy. The inactivity branch adds insulin and needs the fact.
+    /// Needs no sensor, so it is the exclusion that holds by default rather than by configuration.
+    public var inNightWindow: Bool
+    /// Sleep detector reports SLEEPING or PRE_SLEEP. Covers sleep outside the configured window,
+    /// on the cycles where the detector has data.
+    public var asleep: Bool
+    /// Steps-based morning lie-in. Covers oversleeping past the configured night end.
+    public var sleepInActive: Bool
     public var thresholds: ActivityThresholds
 
     public init(
@@ -116,6 +127,9 @@ public struct ActivityInputs: Equatable, Sendable {
         steps30: Int,
         steps60: Int,
         avgHeartRate: Double,
+        inNightWindow: Bool = false,
+        asleep: Bool = false,
+        sleepInActive: Bool = false,
         thresholds: ActivityThresholds
     ) {
         self.steps5 = steps5
@@ -123,6 +137,9 @@ public struct ActivityInputs: Equatable, Sendable {
         self.steps30 = steps30
         self.steps60 = steps60
         self.avgHeartRate = avgHeartRate
+        self.inNightWindow = inNightWindow
+        self.asleep = asleep
+        self.sleepInActive = sleepInActive
         self.thresholds = thresholds
     }
 }
@@ -206,7 +223,17 @@ public enum ActivityClassifier {
 
         // Not step-active. Inactivity branch (mirrors `currentProfileSwitch == 100
         // && recentSteps60Min < inactivitySteps`).
-        if inputs.steps60 < t.inactivitySteps {
+        //
+        // Sleep exclusion (AAPS 37a79aac83 then 483d2fec20, ported into the predicate rather than
+        // the gate above it because that gate has several defeat paths). A sleeping person has
+        // near-zero steps by definition, so the step test is satisfied every night and the branch
+        // reads "asleep" as "sedentary". It then raises the profile, which scales DynISF by
+        // 100/inactivityPct and lifts basal: it adds insulin. Reported live at 06:09, profile 130%
+        // with glucose at 71 and falling. Three independent exclusions, none of which covers every
+        // case alone: the configured clock window, the detector, and the morning lie-in.
+        if inputs.steps60 < t.inactivitySteps,
+           !inputs.inNightWindow, !inputs.asleep, !inputs.sleepInActive
+        {
             // 2026-07-21 safety guard (AAPS 45f17cca5a), the companion to the dead-zone fix in
             // `fuseHrState`. The inactivity branch adds insulin on the assumption the person is
             // sedentary, and an elevated heart rate contradicts that assumption whatever the step

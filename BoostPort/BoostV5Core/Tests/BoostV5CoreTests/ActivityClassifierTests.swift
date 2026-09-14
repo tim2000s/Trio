@@ -269,6 +269,58 @@ final class ActivityClassifierTests: XCTestCase {
         XCTAssertEqual(r.profilePercent, 130)
     }
 
+    // MARK: - 2026-07-31 inactivity sleep exclusions (AAPS 37a79aac83, 483d2fec20)
+
+    func testInactivityFiresWhenAwakeAndOutsideTheNightWindow() {
+        // Baseline for the three exclusion tests below: nothing set, so the branch fires.
+        let r = ActivityClassifier.classify(stepOnlyInputs(s5: 0, s15: 0, s30: 0, s60: 100))
+        XCTAssertEqual(r.state, .inactive)
+        XCTAssertEqual(r.profilePercent, 130)
+    }
+
+    func testInactivitySuppressedInsideTheConfiguredNightWindow() {
+        var i = stepOnlyInputs(s5: 0, s15: 0, s30: 0, s60: 100)
+        i.inNightWindow = true
+        let r = ActivityClassifier.classify(i)
+        XCTAssertNotEqual(r.state, .inactive)
+        XCTAssertEqual(r.profilePercent, 100) // no profile raise, so no added insulin
+        XCTAssertFalse(r.exerciseActive)
+    }
+
+    func testInactivitySuppressedWhileTheDetectorHoldsSleep() {
+        var i = stepOnlyInputs(s5: 0, s15: 0, s30: 0, s60: 100)
+        i.asleep = true
+        XCTAssertEqual(ActivityClassifier.classify(i).profilePercent, 100)
+    }
+
+    func testInactivitySuppressedDuringTheMorningLieIn() {
+        var i = stepOnlyInputs(s5: 0, s15: 0, s30: 0, s60: 100)
+        i.sleepInActive = true
+        XCTAssertEqual(ActivityClassifier.classify(i).profilePercent, 100)
+    }
+
+    func testNightWindowExclusionNeedsNoSensorSignal() {
+        // The point of keying on the clock: it holds with no HR, no detector state and no lie-in.
+        var i = ActivityInputs(
+            steps5: 0, steps15: 0, steps30: 0, steps60: 0,
+            avgHeartRate: 0, inNightWindow: true, asleep: false, sleepInActive: false,
+            thresholds: ActivityThresholds()
+        )
+        XCTAssertEqual(ActivityClassifier.classify(i).profilePercent, 100)
+        i.inNightWindow = false
+        XCTAssertEqual(ActivityClassifier.classify(i).profilePercent, 130)
+    }
+
+    func testEqualNightTimesAreAnEmptyWindowNotAWholeDay() {
+        // Guards the 2026-07-02 behaviour the Kotlin carried into NightWindow: start == end must
+        // not union to cover the day, which would make it permanently night.
+        XCTAssertFalse(NightMode.minuteInWindow(now: 300, start: 1320, end: 1320))
+        XCTAssertFalse(NightMode.minuteInWindow(now: 1320, start: 1320, end: 1320))
+        // And the ordinary wrap still works: 22:00 to 07:00 contains 06:09 but not 12:00.
+        XCTAssertTrue(NightMode.minuteInWindow(now: 6 * 60 + 9, start: 22 * 60, end: 7 * 60))
+        XCTAssertFalse(NightMode.minuteInWindow(now: 12 * 60, start: 22 * 60, end: 7 * 60))
+    }
+
     // MARK: - exerciseActive flag coverage
 
     func testExerciseActiveFlagPerState() {

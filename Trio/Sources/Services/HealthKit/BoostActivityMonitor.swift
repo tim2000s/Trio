@@ -150,11 +150,6 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             hrStressDetection: prefs.boostHrStressDetection,
             hrIntegrationEnabled: prefs.boostHrIntegrationEnabled
         )
-        let activity = ActivityClassifier.classify(ActivityInputs(
-            steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
-            avgHeartRate: avgHr, thresholds: thresholds
-        ))
-
         // 2) Sleep state machine — uses the LEARNED night window + resting HR once enough
         // sessions exist (AAPS SleepHistoryTracker.aggregate → effective values feed the
         // detector; the night-mode clock window itself stays configured). Below the learning
@@ -204,6 +199,32 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
         )
         let asleep = sleep.state == .sleeping
+
+        // Activity classification runs AFTER the sleep detector because its inactivity branch is
+        // excluded during sleep (AAPS 37a79aac83 / 483d2fec20) and needs this cycle's state. The
+        // exclusions use the CONFIGURED night window rather than the learned one, matching the
+        // Kotlin, and read it whether or not night mode is enabled. `asleep` here is SLEEPING or
+        // PRE_SLEEP: the person is in bed for both.
+        let inNightWindow = NightMode.minuteInWindow(
+            now: nowMinute, start: configNightStart, end: configNightEnd
+        )
+        let inBed = sleep.state == .sleeping || sleep.state == .preSleep
+        // Morning lie-in, computed locally from this cycle's steps rather than from the stored
+        // snapshot (which is the previous cycle's). Window is [nightEnd, nightEnd + sleepInHours).
+        let sleepInMinutes = Int(d(prefs.boostSleepInHours) * 60)
+        let lieIn: Bool = {
+            guard sleepInMinutes > 0 else { return false }
+            let windowEnd = (configNightEnd + sleepInMinutes) % 1440
+            guard NightMode.minuteInWindow(now: nowMinute, start: configNightEnd, end: windowEnd)
+            else { return false }
+            return Double(steps60) < d(prefs.boostSleepInSteps)
+        }()
+        let activity = ActivityClassifier.classify(ActivityInputs(
+            steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
+            avgHeartRate: avgHr,
+            inNightWindow: inNightWindow, asleep: inBed, sleepInActive: lieIn,
+            thresholds: thresholds
+        ))
 
         // Record sleep/wake transitions into the rolling history (AAPS: onSleepStart on any
         // non-SLEEPING→SLEEPING; onWake on SLEEPING→non-SLEEPING, with HR p10 over the sleep
