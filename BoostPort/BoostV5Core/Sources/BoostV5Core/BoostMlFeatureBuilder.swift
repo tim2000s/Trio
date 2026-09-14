@@ -17,6 +17,12 @@ import Foundation
 /// cycle's value — matching AAPS's `ring.lagged(lag) ?: current`.
 public enum BoostMlFeatureBuilder {
     public static let lookback = 6
+
+    /// The span the lookback window claims to represent, plus one cycle of slack so an ordinary
+    /// late reading does not discard usable history. Six cycles on the five-minute grid is thirty
+    /// minutes, so anything older than thirty-five is not the preceding six cycles and must not be
+    /// presented to the model as though it were. (AAPS `STALE_AFTER_MS`, 2026-08-14.)
+    public static let staleAfterMs: Double = 35 * 60 * 1000
     public static let lookbackFeatures = [
         "cgm_mgdl", "iob_iob", "iob_activity",
         "sug_eventualBG", "recent_smb_units_60m", "sug_minDelta"
@@ -62,8 +68,22 @@ public enum BoostMlFeatureBuilder {
         public var snapshots: [CycleSnapshot]
         public init(snapshots: [CycleSnapshot] = []) { self.snapshots = snapshots }
 
+        /// Append, then drop anything the window no longer covers, by age as well as by count.
+        ///
+        /// The buffer is persisted across process restarts and the decision series is interrupted
+        /// often. Trimming by length alone leaves pre-gap snapshots in place, so a cycle arriving
+        /// two hours after the last one was scored with lag features two hours old presented as the
+        /// preceding five cycles. AAPS established this by replay rather than inspection: scoring a
+        /// rebuilt feature vector with the exported model reproduces the published hypo risk on
+        /// contiguous cycles to a median absolute error of 0.003 to 0.006, and on post-gap cycles
+        /// the carried snapshots explained the published score better than either a cleared buffer
+        /// or the true contiguous history, for all nine users. A third of scored cycles follow such
+        /// a break, and between 100 and 160 mg/dL they crossed the 0.30 damper threshold on 8.6% of
+        /// cycles against 3.9% for the rest. (AAPS 2026-08-14.)
         public mutating func push(_ s: CycleSnapshot) {
             snapshots.append(s)
+            let oldest = s.ts - BoostMlFeatureBuilder.staleAfterMs
+            snapshots.removeAll { $0.ts < oldest }
             while snapshots.count > BoostMlFeatureBuilder.lookback { snapshots.removeFirst() }
         }
 

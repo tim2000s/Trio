@@ -11,6 +11,60 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
         )
     }
 
+    // MARK: - Ring-buffer staleness (AAPS 2026-08-14)
+
+    private func snapAtMinute(_ minute: Double, _ cgm: Double) -> B.CycleSnapshot {
+        snap(minute * 60000, cgm)
+    }
+
+    func testRingBufferDropsSnapshotsOlderThanTheLookbackWindow() {
+        var ring = B.RingBuffer()
+        // Five contiguous cycles on the five-minute grid, then a two-hour break.
+        for i in 0 ..< 5 { ring.push(snapAtMinute(Double(i) * 5, 100 + Double(i))) }
+        XCTAssertEqual(ring.snapshots.count, 5)
+        ring.push(snapAtMinute(140, 200)) // 2 h after the last one
+
+        // Only the new cycle survives: the pre-gap snapshots are not the preceding five cycles.
+        XCTAssertEqual(ring.snapshots.count, 1)
+        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 200)
+        XCTAssertNil(ring.lagged(1))
+    }
+
+    func testRingBufferKeepsHistoryAcrossAnOrdinaryLateReading() {
+        var ring = B.RingBuffer()
+        for i in 0 ..< 5 { ring.push(snapAtMinute(Double(i) * 5, 100 + Double(i))) }
+        // A cycle 8 minutes after the last rather than 5. The slack in the window is there so a
+        // late reading does not discard usable history.
+        ring.push(snapAtMinute(28, 200))
+        XCTAssertEqual(ring.snapshots.count, 6)
+        XCTAssertEqual(ring.lagged(5)?.cgmMgdl, 100)
+    }
+
+    func testRingBufferBoundaryIsThirtyFiveMinutes() {
+        var ring = B.RingBuffer()
+        ring.push(snapAtMinute(0, 100))
+        ring.push(snapAtMinute(35, 200)) // exactly 35 min: the older entry is not yet stale
+        XCTAssertEqual(ring.snapshots.count, 2)
+
+        var ring2 = B.RingBuffer()
+        ring2.push(snapAtMinute(0, 100))
+        ring2.push(snapAtMinute(35.001, 200)) // just past it
+        XCTAssertEqual(ring2.snapshots.count, 1)
+    }
+
+    func testRingBufferDropsOnlyTheEntriesOutsideTheWindow() {
+        var ring = B.RingBuffer()
+        // Two old cycles, a gap, then three recent ones. Only the old pair should go.
+        ring.push(snapAtMinute(0, 100))
+        ring.push(snapAtMinute(5, 101))
+        ring.push(snapAtMinute(50, 102))
+        ring.push(snapAtMinute(55, 103))
+        ring.push(snapAtMinute(60, 104))
+        XCTAssertEqual(ring.snapshots.count, 3)
+        XCTAssertEqual(ring.lagged(2)?.cgmMgdl, 102)
+        XCTAssertNil(ring.lagged(3))
+    }
+
     func testRingBufferLaggedAndCap() {
         var ring = B.RingBuffer()
         for i in 0 ..< 8 { ring.push(snap(Double(i), 100 + Double(i))) }
