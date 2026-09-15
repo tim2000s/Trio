@@ -5,6 +5,11 @@ import Foundation
 final class OpenAPS {
     private let processQueue = DispatchQueue(label: "OpenAPS.processQueue", qos: .utility)
 
+    /// Confirm-tranche state, held across cycles. In memory only, matching the Kotlin singleton: a
+    /// restart drops any pending hold, which fails safe, because a withheld remainder that is never
+    /// released is insulin not given.
+    private static let confirmTranche = ConfirmTranche()
+
     private let storage: FileStorage
     private let tddStorage: TDDStorage
     private let glucoseStorage: GlucoseStorage
@@ -883,6 +888,44 @@ final class OpenAPS {
                     // Apply the binding cap in Decimal (min can only reduce) so no Double
                     // round-trip touches the delivered value.
                     if caps.cap != .none { boostDose = min(boostDose, v1WouldDose) }
+
+                    // 2026-08-27 confirm tranche (AAPS dad3f3a63b + 73c5febb8d). The confirm shot is
+                    // otherwise the same size whether the excursion reaches 20 mg/dL or 100, and it
+                    // carries 61.7% of the insulin delivered in the following ninety minutes. This
+                    // gives a fraction now and holds the rest for ten minutes, releasing it only if
+                    // a rule on quantities the loop already holds clears the threshold. It can only
+                    // ever deliver less than the engine would without it.
+                    //
+                    // Evaluated inside this guarded block deliberately. Ten minutes after a confirm
+                    // the block runs on 76.4% of cycles, and the rest divides into exactly two
+                    // causes, the rolling cumulative cap and the sleep gate, both states in which
+                    // the engine has already decided against a microbolus. A release that cannot
+                    // land is that machinery agreeing with the withhold.
+                    if preferences.boostV5ConfirmTranche {
+                        let tranche = Self.confirmTranche
+                        tranche.immediateFraction = (preferences.boostV5TrancheFraction as NSDecimalNumber).doubleValue
+                        tranche.releaseThreshold = (preferences.boostV5TrancheThreshold as NSDecimalNumber).doubleValue
+                        let sized = boostDose
+                        let nowMs = clock.timeIntervalSince1970 * 1000.0
+                        let bgNow = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
+                        if result.decision.mealHypothesis == .confirmed {
+                            boostDose = Decimal(tranche.onConfirm(
+                                nowMs: nowMs, bg: bgNow,
+                                sizedDose: (sized as NSDecimalNumber).doubleValue
+                            ))
+                        } else {
+                            boostDose = sized + Decimal(tranche.onCycle(nowMs: nowMs, bg: bgNow))
+                        }
+                        // Sized and delivered together, so the withheld amount is priced without
+                        // needing a counterfactual.
+                        det.reason += " tranche=\(String(format: "%.3f", (sized as NSDecimalNumber).doubleValue))," +
+                            "\(String(format: "%.3f", (boostDose as NSDecimalNumber).doubleValue))," +
+                            "held=\(String(format: "%.3f", tranche.heldU));"
+                    } else if result.decision.mealHypothesis == .idle {
+                        // Drop any hold once the engine has left the meal state entirely, so a
+                        // remainder cannot survive a toggle-off and a later session.
+                        Self.confirmTranche.reset()
+                    }
                     let nonMealCapped = caps.cap == .nonMeal
                     let postRescueCapped = caps.cap == .postRescue
 

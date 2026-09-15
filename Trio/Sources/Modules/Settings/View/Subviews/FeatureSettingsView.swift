@@ -122,6 +122,9 @@ struct FeatureSettingsView: BaseView {
                 boostSlider("Early primer ceiling (U)", $state.boostV5PrimerCapU, in: 0 ... 2.5, step: 0.05)
                 Toggle("Primer via retractable temp basal", isOn: $state.boostV5PrimerTbrFallback)
                 Toggle("Force primer as bolus", isOn: $state.boostV5PrimerBolusMode)
+                Toggle("Confirm tranche", isOn: $state.boostV5ConfirmTranche)
+                boostSlider("Tranche immediate fraction", $state.boostV5TrancheFraction, in: 0 ... 1, step: 0.05)
+                boostSlider("Tranche release threshold", $state.boostV5TrancheThreshold, in: 0 ... 1, step: 0.01)
             }
             .listRowBackground(Color.chart)
 

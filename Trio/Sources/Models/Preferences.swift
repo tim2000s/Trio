@@ -97,6 +97,14 @@ struct Preferences: JSON, Equatable {
     /// User override forcing the bolus route even when the fallback above is set (AAPS
     /// `ApsBoostV5PrimerBolusMode`). Honoured always, and recorded in the reason when it overrides.
     var boostV5PrimerBolusMode: Bool = false
+    /// Confirm tranche (AAPS `ApsBoostV5ConfirmTranche`). Opt-in: the confirm shot gives a fraction
+    /// now and holds the rest for ten minutes, released only if the rise continues.
+    var boostV5ConfirmTranche: Bool = false
+    /// Fraction of the confirm shot delivered immediately.
+    var boostV5TrancheFraction: Decimal = 0.5
+    /// Release threshold on the rule's probability. Raising it withholds more, which is a
+    /// tightening. Only this is personal; the coefficients are population-derived.
+    var boostV5TrancheThreshold: Decimal = 0.48
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
     // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
@@ -229,6 +237,9 @@ extension Preferences {
         case boostV5PrimerCapU
         case boostV5PrimerTbrFallback
         case boostV5PrimerBolusMode
+        case boostV5ConfirmTranche
+        case boostV5TrancheFraction
+        case boostV5TrancheThreshold
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
@@ -577,6 +588,18 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5PrimerBolusMode) {
             preferences.boostV5PrimerBolusMode = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5ConfirmTranche) {
+            preferences.boostV5ConfirmTranche = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5TrancheFraction) {
+            preferences.boostV5TrancheFraction = max(0, min(1, v))
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5TrancheThreshold) {
+            preferences.boostV5TrancheThreshold = max(0, min(1, v))
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v

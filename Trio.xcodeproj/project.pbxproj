@@ -360,6 +360,7 @@
 		49B9B57F2D5768D2009C6B59 /* AdjustmentStored+Helper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49B9B57E2D5768D2009C6B59 /* AdjustmentStored+Helper.swift */; };
 		49C782A72F73D9870062B0DD /* AlertEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C782A62F73D9870062B0DD /* AlertEntry.swift */; };
 		4C8FB9B88D1E3F3048E359A1 /* DynIsf.swift in Sources */ = {isa = PBXBuildFile; fileRef = D63E8362C1C690634B3A760A /* DynIsf.swift */; };
+		0933953413114AEEA9E211B3 /* ConfirmTranche.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF954BACF54A4E66A2F9D886 /* ConfirmTranche.swift */; };
 		4D4A76587157CCAE43546A45 /* meal_likelihood_model.json in Resources */ = {isa = PBXBuildFile; fileRef = 2874791B21667B982F4853A7 /* meal_likelihood_model.json */; };
 		5075C1608E6249A51495C422 /* TargetsEditorProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BDEA2DC60EDE0A3CA54DC73 /* TargetsEditorProvider.swift */; };
 		51B012820CBDA5471BFE742B /* SafetyGates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 621F1DA0758AAA87D5E16203 /* SafetyGates.swift */; };
@@ -1883,6 +1884,7 @@
 		D543DE17E0054AF0821411BB /* QuickPickTreatmentsConfigDataFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPickTreatmentsConfigDataFlow.swift; sourceTree = "<group>"; };
 		D3E469DC3B11FE76BA04A2CB /* ActivityLoadTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ActivityLoadTracker.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/ActivityLoadTracker.swift; sourceTree = "<group>"; };
 		D63E8362C1C690634B3A760A /* DynIsf.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DynIsf.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/DynIsf.swift; sourceTree = "<group>"; };
+		CF954BACF54A4E66A2F9D886 /* ConfirmTranche.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ConfirmTranche.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/ConfirmTranche.swift; sourceTree = "<group>"; };
 		D7C5E1F4A7B91E2F3C5D6E71 /* TimeInterval+Convenience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimeInterval+Convenience.swift"; sourceTree = "<group>"; };
 		DB3EBC8BA17C4627BD32C58F /* QuickPickTreatmentsConfigRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPickTreatmentsConfigRootView.swift; sourceTree = "<group>"; };
 		DD09D47A2C5986D1003FEA5D /* CalendarEventSettingsDataFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventSettingsDataFlow.swift; sourceTree = "<group>"; };
@@ -3677,6 +3679,7 @@
 				FFE529480EE2B465AB4E9AF4 /* BoostV5Store.swift */,
 				B3C65E4DC20B224B954E57CA /* CircadianISF.swift */,
 				D63E8362C1C690634B3A760A /* DynIsf.swift */,
+				CF954BACF54A4E66A2F9D886 /* ConfirmTranche.swift */,
 				5FF867EB72F8DF29A1503BCD /* HrSourceResolver.swift */,
 				6B47C0D3212501122B86F02C /* IsfShadowEma.swift */,
 				AE9DA82D44166E0A9570DE7F /* MealHypothesis.swift */,
@@ -6101,6 +6104,7 @@
 				3CAB77EE67F6707363817C22 /* BoostV5Store.swift in Sources */,
 				DB75BABF0D4F32B95CD31397 /* CircadianISF.swift in Sources */,
 				4C8FB9B88D1E3F3048E359A1 /* DynIsf.swift in Sources */,
+				0933953413114AEEA9E211B3 /* ConfirmTranche.swift in Sources */,
 				88F296D2099F0CC303F0CD3C /* HrSourceResolver.swift in Sources */,
 				BE4220EE00FEBA92CFE1E101 /* IsfShadowEma.swift in Sources */,
 				0B426FFA7AAB28BA084E040F /* MealHypothesis.swift in Sources */,
