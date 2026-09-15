@@ -105,6 +105,9 @@ struct Preferences: JSON, Equatable {
     /// Release threshold on the rule's probability. Raising it withholds more, which is a
     /// tightening. Only this is personal; the coefficients are population-derived.
     var boostV5TrancheThreshold: Decimal = 0.48
+    /// Enrolment in the pre-registered post-rescue tight-ramp trial (AAPS 2378baf367). Default off,
+    /// and deliberately not auto-config managed: enrolling is a decision, not a derivation.
+    var boostV5PostRescueTightRampTrial: Bool = false
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
     // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
@@ -240,6 +243,7 @@ extension Preferences {
         case boostV5ConfirmTranche
         case boostV5TrancheFraction
         case boostV5TrancheThreshold
+        case boostV5PostRescueTightRampTrial
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
@@ -600,6 +604,10 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Decimal.self, forKey: .boostV5TrancheThreshold) {
             preferences.boostV5TrancheThreshold = max(0, min(1, v))
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5PostRescueTightRampTrial) {
+            preferences.boostV5PostRescueTightRampTrial = v
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v

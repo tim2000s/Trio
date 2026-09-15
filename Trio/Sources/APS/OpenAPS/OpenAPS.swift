@@ -926,6 +926,56 @@ final class OpenAPS {
                         // remainder cannot survive a toggle-off and a later session.
                         Self.confirmTranche.reset()
                     }
+
+                    // 2026-07-23 composed post-rescue rebound guard (AAPS 0eb4a65b39), with the
+                    // 2026-08-03 tight-ramp trial arm (2378baf367) layered on it.
+                    //
+                    // In AAPS the guard applies to the final microbolus of the V1 tier engine,
+                    // whose post-rescue tier block demotes the scaled tiers to unscaled ones, so a
+                    // delta-inflated requirement still delivered full-size boluses into an
+                    // unannounced rescue-carb rebound: 3.55 U at 97 mg/dL, 25 minutes after a low of
+                    // 67, a second insulin-driven hypo, and the loop disabled by the user. Trio has
+                    // no V1 tier engine, so the analogue is the final Boost dose here, after the
+                    // caps and the tranche. Applied only inside the post-rescue window with no carbs
+                    // on board. It is restraint only, so it can never increase a dose.
+                    //
+                    // AAPS priced the guard at 34% [32, 37] of the removed insulin sitting directly
+                    // ahead of a second low below 70, against 27% for the earlier cap and 14 to 19%
+                    // for other levers, costing 9% of affected episodes as genuine post-hypo meals
+                    // at a median 0.8 U under-delivery. That pricing was measured on V1 tier doses,
+                    // so it bounds the direction here rather than the magnitude.
+                    let cobNow = (det.cob ?? 0)
+                    if inPostRescueWindow, cobNow == 0, boostDose > 0 {
+                        let bgForGuard = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
+                        let tightRamp = preferences.boostV5PostRescueTightRampTrial
+                            && PostRescueTrial.tightRampArm(
+                                seed: BoostTrialSeed.seed,
+                                dayIndex: Int(floor(clock.timeIntervalSince1970 / 86400))
+                            )
+                        if let scale = SafetyGateConstants.postRescueScale(bg: bgForGuard, tightRamp: tightRamp) {
+                            let pre = boostDose
+                            let step = preferences.bolusIncrement > 0 ? preferences.bolusIncrement : 0.05
+                            boostDose = Decimal(
+                                floor(
+                                    (pre as NSDecimalNumber).doubleValue * scale
+                                        / (step as NSDecimalNumber).doubleValue + 1E-9
+                                )
+                            ) * step
+                            det.reason += " post-rescue rebound scale \(Int((scale * 100).rounded()))%" +
+                                (tightRamp ? " [trial:tight]" : "") +
+                                ": SMB \(String(format: "%.2f", (pre as NSDecimalNumber).doubleValue))→" +
+                                "\(String(format: "%.2f", (boostDose as NSDecimalNumber).doubleValue));"
+                        }
+                    }
+                    // Emitted every cycle so trial exposure is countable on days the guard never
+                    // fired, matching the Kotlin.
+                    if preferences.boostV5PostRescueTightRampTrial {
+                        let arm = PostRescueTrial.tightRampArm(
+                            seed: BoostTrialSeed.seed,
+                            dayIndex: Int(floor(clock.timeIntervalSince1970 / 86400))
+                        )
+                        det.reason += " prTrial=\(arm ? "tight" : "control");"
+                    }
                     let nonMealCapped = caps.cap == .nonMeal
                     let postRescueCapped = caps.cap == .postRescue
 

@@ -125,6 +125,7 @@ struct FeatureSettingsView: BaseView {
                 Toggle("Confirm tranche", isOn: $state.boostV5ConfirmTranche)
                 boostSlider("Tranche immediate fraction", $state.boostV5TrancheFraction, in: 0 ... 1, step: 0.05)
                 boostSlider("Tranche release threshold", $state.boostV5TrancheThreshold, in: 0 ... 1, step: 0.01)
+                Toggle("Post-rescue tight-ramp trial", isOn: $state.boostV5PostRescueTightRampTrial)
             }
             .listRowBackground(Color.chart)
 

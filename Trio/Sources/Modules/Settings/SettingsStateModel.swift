@@ -36,6 +36,7 @@ extension Settings {
         @Published var boostV5ConfirmTranche: Bool = false
         @Published var boostV5TrancheFraction: Decimal = 0.5
         @Published var boostV5TrancheThreshold: Decimal = 0.48
+        @Published var boostV5PostRescueTightRampTrial: Bool = false
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
         @Published var boostDynIsfNormalTarget: Decimal = 99
@@ -122,6 +123,8 @@ extension Settings {
                 boostV5TrancheFraction = $0 }
             subscribePreferencesSetting(\.boostV5TrancheThreshold, on: $boostV5TrancheThreshold) {
                 boostV5TrancheThreshold = $0 }
+            subscribePreferencesSetting(\.boostV5PostRescueTightRampTrial, on: $boostV5PostRescueTightRampTrial) {
+                boostV5PostRescueTightRampTrial = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
             subscribePreferencesSetting(\.boostDynIsfNormalTarget, on: $boostDynIsfNormalTarget) { boostDynIsfNormalTarget = $0 }

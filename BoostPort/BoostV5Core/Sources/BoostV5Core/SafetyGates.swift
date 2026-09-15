@@ -46,6 +46,64 @@ public enum SafetyGateConstants {
         if bg < 170 { return 0.3 + 0.7 * (bg - 120) / 50 }
         return 1.0
     }
+
+    /// Glucose at or above which the shipped guard does not apply at all. This is a cliff rather
+    /// than a relaxation, and it is the thing the tight-ramp trial arm removes.
+    public static let postRescueGuardCeilingMgdl = 170.0
+
+    /// Treatment-arm cap on the post-rescue scale.
+    public static let tightRampCap = 0.60
+
+    /// The scale to apply to a post-rescue cycle, or nil when the guard does not apply.
+    ///
+    /// On a control day, or when nobody is enrolled, this is the shipped guard byte for byte: the
+    /// graduated scale below 170 mg/dL and nothing at or above it. On a treatment day the guard runs
+    /// across the whole window with the scale capped, which is the arm under test. Because the cap
+    /// can only lower the scale, a treatment cycle can never deliver more insulin than the same
+    /// cycle would without the trial, at any glucose value.
+    public static func postRescueScale(bg: Double, tightRamp: Bool) -> Double? {
+        guard tightRamp || bg < postRescueGuardCeilingMgdl else { return nil }
+        let base = postRescueReboundScale(bg: bg)
+        return tightRamp ? min(base, tightRampCap) : base
+    }
+}
+
+/// Day-level arm assignment for the pre-registered post-rescue tight-ramp trial (AAPS 2378baf367).
+///
+/// The cohort evidence for tightening the post-rescue ramp is unproven: every candidate's
+/// cluster-bootstrap interval over users overlaps zero, and only two of eight users showed
+/// favourable targeting. So it ships as a randomised within-user trial rather than as a change,
+/// default off, and enrolment is a deliberate act rather than something auto-config decides.
+///
+/// AAPS records that the trial is underpowered for its primary endpoint, at roughly 28 episodes per
+/// arm in eight weeks against the 30 percentage points it could detect, and is run for mechanism
+/// confirmation and safety surveillance.
+public enum PostRescueTrial {
+    /// Whether `dayIndex`, in local days since the epoch, is a treatment day for this install's
+    /// seed. Pure and deterministic, so an offline analysis reproduces every arm from the seed
+    /// alone rather than trusting a logged flag.
+    ///
+    /// Balanced in 7-day blocks, four treatment days in even blocks and three in odd, so the arms
+    /// stay even over any fortnight. Positions within a block are shuffled per block, so the arm is
+    /// never confounded with the weekday.
+    public static func tightRampArm(seed: String, dayIndex: Int) -> Bool {
+        guard !seed.isEmpty else { return false }
+        let block = Int(floor(Double(dayIndex) / 7.0))
+        let pos = ((dayIndex % 7) + 7) % 7
+        let treatDays = ((block % 2) + 2) % 2 == 0 ? 4 : 3
+        let order = (0 ... 6).sorted { fnv1a64("\(seed)|\(block)|\($0)") < fnv1a64("\(seed)|\(block)|\($1)") }
+        return order.prefix(treatDays).contains(pos)
+    }
+
+    /// FNV-1a 64, stable across platforms and trivially re-implementable in the analysis.
+    public static func fnv1a64(_ s: String) -> Int64 {
+        var h: UInt64 = 14_695_981_039_346_656_037
+        for scalar in s.unicodeScalars {
+            h ^= UInt64(scalar.value)
+            h = h &* 1_099_511_628_211
+        }
+        return Int64(bitPattern: h)
+    }
 }
 
 public struct Phase3Inputs {
