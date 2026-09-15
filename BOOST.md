@@ -186,26 +186,27 @@ fixtures are gitignored (real glucose/insulin data) and the suites `XCTSkip` cle
 Full method, results and limits: [`BoostPort/docs/REPLAY.md`](BoostPort/docs/REPLAY.md).
 
 **1. DynISF golden master** (`Tests/BoostV5CoreTests/Replay/DynIsfReplayTests.swift`) — replays the
-DynISF/`future_sens` maths over **266,323 cycles across 7 users** (Feb–Jun 2026) captured from the
+DynISF/`future_sens` maths over **651,120 cycles across 13 users** (Aug 2025 to Sep 2026, asserts
+scoped to the v4.1.5 reference build) captured from the
 AndroidAPS **Boost v4.1.5** reference (`boost_decisions` in the local TimescaleDB, exported by
 [`BoostPort/sim/export_boost_decisions.sh`](BoostPort/sim/export_boost_decisions.sh)). Per‑profile
 divisor fit; out‑of‑scope variants (v4.2–v4.4.2, v3) detected and excluded:
 
 | check | rows | match |
 |------|------|-------|
-| `variableSens` (end‑to‑end ISF) | 129,063 | **99.97%** |
+| `variableSens` (end‑to‑end ISF) | 154,585 | **99.98%** |
 | `isfTargetV1 × globalScale` | 135,147 | **99.97%** |
-| `blendedTdd` / `finalTdd` | 136,947 | **99.78%** |
+| `blendedTdd` / `finalTdd` | 159,302 | **99.78%** |
 | `deltaAccl` | 38,021 | **100.0%** |
 
 **2. Engine robustness** (`BoostEngineReplayTests.swift`) — drives the full V5 state machine over the
-same **266,323 real glucose trajectories** (per‑user timelines): **0 violations** — no NaN/inf, no
+same **651,120 real glucose trajectories** (per‑user timelines): **0 violations** — no NaN/inf, no
 negative dose, none over maxIOB.
 
 **3. Dosing‑delivery golden master** (`V5ShadowReplayTests.swift`) — the dosing‑path check. Replays
 the **on‑device V5 shadow** (`openaps.suggested.boostV5_*` in Nightscout deviceStatus, produced by
 the AndroidAPS Kotlin V5) through the Swift port's dose‑cap + Phase‑3 safety‑gate stages over
-**19,196 cycles across 5 users** (rolling last 10 days; fixture built by
+**30,602 cycles across 4 users** (rolling last 10 days; fixture built by
 [`BoostPort/sim/fetch_v5shadow.py`](BoostPort/sim/fetch_v5shadow.py)):
 
 Reproducibility note: a few V5 inputs aren't in the telemetry (the velocity 30‑min rise; the
@@ -215,25 +216,32 @@ test reports exactly which residuals are missing‑input vs a genuine difference
 
 | dosing stage | rows | reproduced | residual is… |
 |------|------|------|------|
-| action multiplier (per state) | 19,196 | **100.0%** | — (nothing to reconstruct) |
-| iobHeadroom safety brake | 19,196 | **98.4%** | logged `maxIOB` ≠ the gate's input on a few cycles |
+| action multiplier (per state) | 30,602 | **100.0%** | — (per‑user Aggression knob fitted) |
+| iobHeadroom safety brake | 30,602 | **98.8%** | logged `maxIOB` ≠ the gate's input on a few cycles |
 | deceleration safety brake | 5,691 | **96.5%** | `deltaAccl` logged at 1–2 dp (formula itself exact) |
-| final SMB dose (uncapped states) | 12,314 | **97.0%** | see decomposition below |
+| final SMB dose (uncapped states) | 13,778 | **98.7%** | see decomposition below |
 
 The dose row decomposes — and the genuine‑difference count is the number that matters:
 
 | | share | meaning |
 |---|---|---|
-| exact (velocity factor 1.0) | 71.8% | reproduced outright |
-| velocity‑reconciled | 25.2% | a velocity factor ∈ [0.4, 1.0] reproduces it — the 30‑min rise that sets it **isn't logged** |
-| ML hypo‑risk brake | 3.0% | device dosed **less**; the post‑action brake needs the on‑device ML model (all such cycles carry ML risk) |
+| exact (velocity factor 1.0) | 61.4% | reproduced outright |
+| velocity‑reconciled | 37.2% | a velocity factor ∈ [0.4, 1.0] reproduces it — the 30‑min rise that sets it **isn't logged** |
+| opt‑in lever | 0.1% | the device runs a lever this replay leaves off (velocity‑budget floor, primer) |
+| ML hypo‑risk brake | 1.2% | device dosed **less**; the post‑action brake needs the on‑device ML model (all such cycles carry ML risk) |
 | **genuine port‑vs‑reference difference** | **0.0%** | — |
 
-**What dosing delivery this confirms:** **97.0%** of uncapped doses reproduce within the inputs we
+**What dosing delivery this confirms:** **98.7%** of uncapped doses reproduce within the inputs we
 have, and **0%** are a genuine port difference — every residual is an input the offline replay
-can't supply (velocity rise, ML risk model), and all of them make the *device* dose less, never the
-port more. The soft safety‑brakes and per‑state action multiplier reproduce the on‑device AndroidAPS
-V5 directly, and the engine emits no out‑of‑bounds dose across 266k trajectories.
+can't supply (velocity rise, ML risk model) or a lever the replay runs disabled, and all of them
+make the *device* dose less, never the port more. The soft safety‑brakes and per‑state action
+multiplier reproduce the on‑device AndroidAPS V5 directly, and the engine emits no out‑of‑bounds
+dose across 651k trajectories.
+
+The opt‑in bucket separates cleanly by shape and is independent support for two of the 2026‑09
+ports, from data not used to build them: ten IDLE cycles above 180 mg/dL dosing exactly 0.5 U with a
+base requirement of zero (the velocity‑budget floor's tier hold), and ten OBSERVING cycles inside the
+primer's 90–220 mg/dL band graduated from 0.05 to 0.45 U (the primer's scaled ceiling).
 
 **What it does not (honest limits, see REPLAY.md):** the **HARD min‑guard hypo‑gate** (~25% of
 cycles) can't be telemetry‑validated — the gate's sanitised input isn't logged (the recorded

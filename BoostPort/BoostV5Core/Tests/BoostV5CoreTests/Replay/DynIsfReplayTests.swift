@@ -56,7 +56,18 @@ final class DynIsfReplayTests: XCTestCase {
         let rows = try fixture()
         var blended = ReplayReport("blendedTdd (pre-adjustment)", tolerance: 0.3, relTolerance: 0.015)
         var final = ReplayReport("finalTdd (× adj factor)", tolerance: 0.3, relTolerance: 0.015)
+        var outOfScope: [String: Int] = [:]
         for row in rows {
+            // Scope to the v4.1.5 reference build, as the variableSens and isfTargetV1 checks below
+            // already do. Until 2026-09 this test asserted over every variant and still passed,
+            // because the corpus was almost entirely v1. It no longer is: `boost-other`, being
+            // v4.2 to v4.4.2 with a retuned DynISF, is now the largest group and runs to the
+            // present day. Left unscoped the test measured the port against three different
+            // algorithm generations at once and reported 90.4%, which says nothing about the port.
+            guard isReferenceBuild(row) else {
+                outOfScope[row.variant ?? "?", default: 0] += 1
+                continue
+            }
             guard let c = row.console,
                   let t7 = c.tdd7d, let t1 = c.tdd1d, let t4 = c.tdd4h, let t84 = c.tdd8to4h
             else { continue }
@@ -85,6 +96,10 @@ final class DynIsfReplayTests: XCTestCase {
         }
         blended.printSummary()
         final.printSummary()
+        if !outOfScope.isEmpty {
+            print("   out-of-scope variants skipped: "
+                + outOfScope.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+        }
         XCTAssertGreaterThan(blended.checked, 1000)
         XCTAssertGreaterThanOrEqual(blended.matchFraction, 0.97, "blendedTdd diverged on \(blended.failures) rows")
         XCTAssertGreaterThanOrEqual(final.matchFraction, 0.97, "finalTdd diverged on \(final.failures) rows")

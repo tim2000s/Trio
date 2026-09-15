@@ -84,6 +84,22 @@ final class V5ShadowReplayTests: XCTestCase {
         return (nil, ih, dc, mx)
     }
 
+    /// Whether a cycle carries the signature of an opt-in lever the port has but this replay runs
+    /// with off, so the port computes zero where the device dosed. See the call site for the
+    /// evidence separating the two shapes.
+    private func isOptInLeverCycle(
+        state: MealHypothesis, bg: Double?, insulinReq: Double?, dose: Double
+    ) -> Bool {
+        guard (insulinReq ?? 1) <= 0.01, dose > 0, let bg else { return false }
+        // Velocity-budget floor: the budget-near-zero high tail, delivering the tier hold.
+        if state == .idle, bg > VelocityBudgetFloor.minBgMgdl, dose <= VelocityBudgetFloor.tierU + 1E-9 {
+            return true
+        }
+        // Primer: once per OBSERVING session, inside its glucose band, at or under its largest cap.
+        if state == .observing, bg >= Primer.bgLo, bg <= Primer.bgCeil, dose <= 2.5 { return true }
+        return false
+    }
+
     func testV5ShadowDosingReproduced() throws {
         let byUser = try loadByUser()
 
@@ -93,20 +109,38 @@ final class V5ShadowReplayTests: XCTestCase {
         var decelBrake = ReplayReport("deceleration brake", tolerance: 0.02)
         // finalDose (uncapped states): classify how closely the port reproduces the on-device dose.
         var doseExact = 0, doseVelocity = 0, doseMlResidual = 0, doseGenuine = 0
+        var doseOptInLever = 0
         var genuine = ReplayReport("finalDose genuine divergence", tolerance: 0.001)
         var hardTotal = 0, cappedSeen = 0
 
-        for (_, cycles) in byUser {
+        for (user, cycles) in byUser {
+            // The Aggression knob is a per-user setting the shadow telemetry does not carry, and it
+            // scales the CONFIRMED multiplier only. Assuming 1.0 measured anyone who has moved the
+            // slider as a divergence: a user running 1.3 records 2.34 where the base is 1.8, which
+            // is the knob and not a port difference. Fit it per user from the recorded CONFIRMED
+            // rows instead, the same way the DynISF replay fits the insulin divisor per profile.
+            let confirmedRatios = cycles.compactMap { c -> Double? in
+                guard c.v5_state == MealHypothesis.confirmed.rawValue, let m = c.v5_actionMult
+                else { return nil }
+                let base = MealActionMultiplier.value(for: .confirmed, aggressionUserKnob: 1.0)
+                return base > 0 ? m / base : nil
+            }.sorted()
+            let aggression = confirmedRatios.isEmpty ? 1.0 : confirmedRatios[confirmedRatios.count / 2]
+            if abs(aggression - 1.0) > 1E-6 {
+                print("   \(user): fitted Aggression knob \(String(format: "%.2f", aggression)) "
+                    + "from \(confirmedRatios.count) CONFIRMED rows")
+            }
+
             for c in cycles {
                 guard let stateStr = c.v5_state, let state = MealHypothesis(rawValue: stateStr),
                       let budget = c.v5_budget, let recActionMult = c.v5_actionMult
                 else { continue }
                 let rec = parseGate(c.v5_gateReduction ?? "none")
 
-                // 1) action multiplier — pure function of state.
+                // 1) action multiplier — pure function of state and the per-user Aggression knob.
                 actionMult.record(
                     expected: recActionMult,
-                    got: MealActionMultiplier.value(for: state, aggressionUserKnob: 1.0),
+                    got: MealActionMultiplier.value(for: state, aggressionUserKnob: aggression),
                     ctx: "\(stateStr)"
                 )
 
@@ -154,6 +188,23 @@ final class V5ShadowReplayTests: XCTestCase {
                         doseVelocity += 1
                     } else if c.mlHypoRisk != nil {
                         doseMlResidual += 1
+                    } else if isOptInLeverCycle(state: state, bg: c.bg, insulinReq: c.insulinReq, dose: recDose) {
+                        // The device is running an opt-in lever this replay leaves off, so the port
+                        // computes zero where the device dosed. Both are identifiable by shape.
+                        //
+                        // The velocity-budget floor delivers min(0.5, committedCap) on the
+                        // budget-near-zero high tail: in this fixture all 10 such cycles are IDLE,
+                        // every one above 180 mg/dL, every one dosing exactly 0.5 U.
+                        //
+                        // The primer is a ceiling scaled by rise, glucose room and insulin headroom,
+                        // fired once per OBSERVING session: all 35 such cycles are OBSERVING, all
+                        // within its 90 to 220 mg/dL band, graduated from 0.05 to 0.45 U.
+                        //
+                        // Neither is reproducible here, because the per-user cap and ceiling that
+                        // size them are not in the telemetry. Counted separately so they are not
+                        // read as port-vs-reference differences, which is what they were before the
+                        // port gained these levers.
+                        doseOptInLever += 1
                     } else {
                         doseGenuine += 1
                         genuine.record(
@@ -170,7 +221,7 @@ final class V5ShadowReplayTests: XCTestCase {
             }
         }
 
-        let doseTot = doseExact + doseVelocity + doseMlResidual + doseGenuine
+        let doseTot = doseExact + doseVelocity + doseMlResidual + doseGenuine + doseOptInLever
         func pct(_ n: Int) -> Double { doseTot > 0 ? 100.0 * Double(n) / Double(doseTot) : 0 }
         let reproduced = doseExact + doseVelocity // explained by inputs we DO have
 
@@ -181,6 +232,7 @@ final class V5ShadowReplayTests: XCTestCase {
         print("── finalDose (uncapped states) — port vs on-device dose, \(doseTot) cycles ──")
         print(String(format: "   exact (velFactor=1.0)             : %6d (%.1f%%)", doseExact, pct(doseExact)))
         print(String(format: "   velocity-reconciled [rise unlogged]: %6d (%.1f%%)", doseVelocity, pct(doseVelocity)))
+        print(String(format: "   opt-in lever [replay runs it off]  : %6d (%.1f%%)", doseOptInLever, pct(doseOptInLever)))
         print(String(
             format: "   ML hypo-risk brake [model offline] : %6d (%.1f%%)  device dosed LESS",
             doseMlResidual,

@@ -18,6 +18,11 @@ import XCTest
 ///
 /// Requires the fixture (gitignored); `XCTSkip`s without it.
 final class BoostEngineReplayTests: XCTestCase {
+    /// Turn the opt-in levers on for this run. They default off, so the baseline replay measures
+    /// the shipped configuration; with them on the same trajectories exercise the primer, the
+    /// velocity-budget floor and the earlier confirm timing.
+    private var levers: Bool { ProcessInfo.processInfo.environment["BOOST_REPLAY_LEVERS"] == "1" }
+
     func testEngineRunsRobustlyOverRealTrajectories() throws {
         let byUser = try ReplayFixture.loadByUser()
         XCTAssertGreaterThanOrEqual(byUser.count, 5, "expected several users")
@@ -65,6 +70,15 @@ final class BoostEngineReplayTests: XCTestCase {
                     baseInsulinReq: baseInsulinReq, roundSmbTo: 0.05, enableSmbPreChecks: true,
                     recentLowBg: recentLowBg, cumulativeRise30min: cumulativeRise30min,
                     hour: hourOfDay(epoch), exerciseActive: false, inPostExerciseWindow: false,
+                    // 2026-09 opt-in dosing levers. Off by default so the baseline replay is
+                    // unchanged; BOOST_REPLAY_LEVERS=1 turns them all on so the paths they add are
+                    // exercised over the same real trajectories. The engine's own gates still
+                    // decide whether any of them fires on a given cycle.
+                    aggressiveEarlyConfirmEnabled: levers,
+                    velocityBudgetActive: levers,
+                    primerCapU: levers ? 0.6 : 0,
+                    primerUseTempBasal: false,
+                    nowMs: Double(epoch) * 1000,
                     timeJumpMinutes: timeJump
                 )
 
