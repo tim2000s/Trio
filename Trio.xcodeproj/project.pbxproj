@@ -401,6 +401,7 @@
 		5A2325582BFCC168003518CA /* NightscoutConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2325572BFCC168003518CA /* NightscoutConnectView.swift */; };
 		5D16287A969E64D18CE40E44 /* PumpConfigStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F60E97100041040446F44E7 /* PumpConfigStateModel.swift */; };
 		6169D5AECA7019C4C802DE30 /* BoostComposedFloorGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730960A064CEEABDC3D99E57 /* BoostComposedFloorGate.swift */; };
+		42647536C7234F0E92331B8B /* BoostRedriveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A5FA91F3264A6EB1FD7AF1 /* BoostRedriveStore.swift */; };
 		63E890B4D951EAA91C071D5C /* BasalProfileEditorStateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAFF91130F2FCCC7EBBA11AD /* BasalProfileEditorStateModel.swift */; };
 		642F76A05A4FF530463A9FD0 /* NightscoutConfigRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8782B44544F38F2B2D82C38E /* NightscoutConfigRootView.swift */; };
 		65070A332BFDCB83006F213F /* TidepoolStartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65070A322BFDCB83006F213F /* TidepoolStartView.swift */; };
@@ -1540,6 +1541,7 @@
 		712393DDF91D0A58F4E1F3BE /* BoostV5Engine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostV5Engine.swift; path = BoostPort/BoostV5Core/Sources/BoostV5Core/BoostV5Engine.swift; sourceTree = "<group>"; };
 		71D44AAA2CA5F5EA0036EE9E /* AlertPermissionsChecker.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AlertPermissionsChecker.swift; sourceTree = "<group>"; };
 		730960A064CEEABDC3D99E57 /* BoostComposedFloorGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostComposedFloorGate.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostComposedFloorGate.swift; sourceTree = "<group>"; };
+		B7A5FA91F3264A6EB1FD7AF1 /* BoostRedriveStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostRedriveStore.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostRedriveStore.swift; sourceTree = "<group>"; };
 		737D5FE82DA7838B2C7CDFE1 /* BoostMLModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BoostMLModels.swift; path = Trio/Sources/APS/OpenAPSSwift/Boost/BoostMLModels.swift; sourceTree = "<group>"; };
 		79BDA519C9B890FD9A5DFCF3 /* ISFEditorDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ISFEditorDataFlow.swift; sourceTree = "<group>"; };
 		7E22146D3DF4853786C78132 /* CarbRatioEditorDataFlow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CarbRatioEditorDataFlow.swift; sourceTree = "<group>"; };
@@ -3688,6 +3690,7 @@
 				95A0EA74245DF3B8F0800B45 /* StepSourceResolver.swift */,
 				657DA561613933051DD4D438 /* BoostActivityStore.swift */,
 				730960A064CEEABDC3D99E57 /* BoostComposedFloorGate.swift */,
+				B7A5FA91F3264A6EB1FD7AF1 /* BoostRedriveStore.swift */,
 				A6B30D3333A6B7F58389A947 /* BoostISF.swift */,
 				737D5FE82DA7838B2C7CDFE1 /* BoostMLModels.swift */,
 				88B16885B4F291F9FF4BDED2 /* BoostMealTimeStore.swift */,
@@ -6111,6 +6114,7 @@
 				683F95E1AED0564B9BBFC5BA /* StepSourceResolver.swift in Sources */,
 				396F181A7486B16DB4FE70D3 /* BoostActivityStore.swift in Sources */,
 				6169D5AECA7019C4C802DE30 /* BoostComposedFloorGate.swift in Sources */,
+				42647536C7234F0E92331B8B /* BoostRedriveStore.swift in Sources */,
 				8B2892C005C3E481143D5D88 /* BoostISF.swift in Sources */,
 				F5BD276B8F36EB2260BC5435 /* BoostMLModels.swift in Sources */,
 				79EEE89832BBA5D02E253115 /* BoostMealTimeStore.swift in Sources */,

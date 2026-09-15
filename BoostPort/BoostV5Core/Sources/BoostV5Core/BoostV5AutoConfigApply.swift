@@ -134,6 +134,15 @@ public enum BoostV5AutoConfigApply {
         case applied
         case keptUserTuned
         case suggestedNotAppliedTbr
+        // Periodic re-derivation outcomes (AAPS 2026-08-03).
+        /// The knob was moved by a scheduled re-derivation.
+        case redriven
+        /// The move was smaller than the measurement error, so it accumulates instead.
+        case insideDeadband
+        /// A quantised knob: the new value must repeat once before it is written.
+        case awaitingConfirmation
+        /// First sight: where the derivation currently sits was recorded and nothing was written.
+        case baselineRecorded
     }
 
     /// Per-knob classification record. `suggestedValue` is the final derived value for the knob
@@ -239,6 +248,225 @@ public enum BoostV5AutoConfigApply {
             resolve(.primerCapU, suggestion.primerCapU)
         }
         return resolutions
+    }
+
+    // MARK: - Periodic re-derivation
+
+    /// Knobs whose movement is tracked as a RATIO, being unit quantities that scale with dose size.
+    public static let redriveRatioKnobs: [BoostAutoConfigKnob] = [.committedCapU, .confirmedCapU]
+
+    /// Knobs whose movement is tracked as an OFFSET, being bounded scales that step by a fixed
+    /// quantum, for which a ratio is meaningless.
+    public static let redriveOffsetKnobs: [BoostAutoConfigKnob] = [.aggression, .hypoCaution]
+
+    /// Tracked knobs, in processing order: the caps before anything computed from them.
+    public static let redriveKnobs: [BoostAutoConfigKnob] = redriveRatioKnobs + redriveOffsetKnobs
+
+    /// Largest single-step change as a ratio of the current value. It bounds one evaluation's move
+    /// when a driver jumps, since a site change or a fortnight of illness can shift median total
+    /// daily dose sharply and a 28-day window carries that in as a step. Clipped movement is not
+    /// lost: on a write the baseline advances only by the movement actually applied, so the
+    /// remainder arrives over later evaluations.
+    public static let redriveMaxStepRatio = 0.25
+
+    /// Minimum move worth writing, per knob: that knob's day-block bootstrap half-width over a
+    /// 28-day window. Below it the move is inside the noise of measuring it. The offset knobs are
+    /// absent deliberately, because their own rounding is already the filter and a band wider than
+    /// the quantum, as hypo caution's 0.16 is against its 0.1, would freeze them below a double step.
+    public static let redriveDeadband: [BoostAutoConfigKnob: Double] = [
+        .committedCapU: 0.07,
+        .confirmedCapU: 0.47
+    ]
+
+    /// Offset knobs get hysteresis instead of a deadband: a new value must be derived twice in a
+    /// row before it is written, so a knob cannot flap across a threshold. One cohort user flipped
+    /// aggression between 1.0 and 0.92 across the 4% line depending on the window.
+    public static let redriveConfirmTwice: Set<BoostAutoConfigKnob> = Set(redriveOffsetKnobs)
+
+    /// Deadband on the recomputed primer ceiling, its own measured half-width.
+    public static let redrivePrimerDeadband = 0.056
+
+    /// Apply the derivation's MOVEMENT to each tracked knob's current value, rather than
+    /// overwriting it with a fresh absolute derivation.
+    ///
+    /// Someone who raised the committed cap from a derived 1.24 to 1.8 was expressing a judgement
+    /// the formula does not capture. Overwriting discards it; freezing means the knob never tracks
+    /// anything again. Applying the movement keeps both: if total daily dose then rises by a fifth,
+    /// they go to 2.16 and their own offset survives. The load-bearing property is that the knob is
+    /// scaled by exactly the ratio the derivation moved, so current over derived is invariant across
+    /// a re-derivation and the offset neither decays nor compounds.
+    ///
+    /// That is also why this needs no notion of who owns a knob, and so no ownership ledger: nothing
+    /// is ever overwritten, so it never matters who set the current value. The AAPS first revision
+    /// used such a ledger and was inert on every existing install, because only the onboarding path
+    /// could populate it and onboarding had already run. This ports the second revision.
+    ///
+    /// The baseline is the derived value at the last write and advances only on a write, so movement
+    /// suppressed by the deadband or held by the raise guard accumulates rather than being lost. On
+    /// the first evaluation there is no baseline, so no tracked knob is written: the run records
+    /// where the derivation sits and tracking begins from the next one. The computed knobs are the
+    /// exception and can be written on that first run, because they are not tracked but recomputed
+    /// from the operative caps every time, so a cumulative cap that has drifted out of step with the
+    /// caps it bounds is corrected immediately.
+    public static func redrive(
+        suggestion: BoostV5AutoConfig.Suggestion,
+        tbrBelow70Pct: Double,
+        timeBelow54Pct: Double,
+        storedValue: (BoostAutoConfigKnob) -> Double?,
+        currentDefault: (BoostAutoConfigKnob) -> Double,
+        baselineValue: (BoostAutoConfigKnob) -> Double?,
+        pendingValue: (BoostAutoConfigKnob) -> Double?,
+        put: (BoostAutoConfigKnob, Double) -> Void,
+        setBaseline: (BoostAutoConfigKnob, Double) -> Void,
+        setPending: (BoostAutoConfigKnob, Double?) -> Void
+    ) -> [Resolution] {
+        var out: [Resolution] = []
+        let raiseGuard = tbrBelow70Pct > Self.tbrRaiseGuardPct || timeBelow54Pct >= Self.tbr54RaiseGuardPct
+        let derivedFor: [BoostAutoConfigKnob: Double] = [
+            .aggression: suggestion.aggression,
+            .hypoCaution: suggestion.hypoCaution,
+            .confirmedCapU: suggestion.confirmedCapU,
+            .committedCapU: suggestion.committedCapU,
+            .cumulativeSmbCap60Min: suggestion.cumulativeSmbCap60MinU,
+            .primerCapU: suggestion.primerCapU
+        ]
+        var operative: [BoostAutoConfigKnob: Double] = [:]
+        for k in BoostAutoConfigKnob.doubleKnobs { operative[k] = storedValue(k) ?? currentDefault(k) }
+
+        for knob in redriveKnobs {
+            let current = operative[knob]!
+            let derivedNow = derivedFor[knob]!
+            guard let baseline = baselineValue(knob), baseline > 0 else {
+                // First sight: record where the derivation sits and change nothing, since movement
+                // is what is tracked and none has been observed yet.
+                setBaseline(knob, derivedNow)
+                out.append(Resolution(
+                    knob: knob, outcome: .baselineRecorded, suggestedValue: derivedNow,
+                    operativeValue: current,
+                    reason: "baseline recorded at \(derivedNow); tracking starts next run"
+                ))
+                continue
+            }
+
+            let rawProposed = redriveRatioKnobs.contains(knob)
+                ? current * (derivedNow / baseline)
+                : current + (derivedNow - baseline)
+            let stepCap = abs(current) * redriveMaxStepRatio
+            let bounded = min(max(rawProposed, current - stepCap), current + stepCap)
+            let proposed = (bounded * 100).rounded() / 100
+            let delta = proposed - current
+
+            if abs(delta) <= Self.defaultEps {
+                // Clear any pending confirmation. "Twice in a row" has to mean consecutively, or a
+                // knob alternating either side of a threshold accumulates a match across the gap and
+                // eventually writes the flap the hysteresis exists to prevent.
+                setPending(knob, nil)
+                out.append(Resolution(
+                    knob: knob, outcome: .insideDeadband, suggestedValue: proposed,
+                    operativeValue: current,
+                    reason: "no movement: derivation \(baseline) → \(derivedNow) leaves \(current) unchanged"
+                ))
+                continue
+            }
+
+            if redriveConfirmTwice.contains(knob) {
+                let pending = pendingValue(knob)
+                if pending == nil || abs(pending! - proposed) > Self.defaultEps {
+                    setPending(knob, proposed)
+                    out.append(Resolution(
+                        knob: knob, outcome: .awaitingConfirmation, suggestedValue: proposed,
+                        operativeValue: current,
+                        reason: "held for confirmation: \(current) → \(proposed) must repeat next run"
+                    ))
+                    continue
+                }
+            } else {
+                let band = redriveDeadband[knob] ?? 0
+                if abs(delta) <= band {
+                    // The baseline is deliberately not advanced, so the movement accumulates.
+                    out.append(Resolution(
+                        knob: knob, outcome: .insideDeadband, suggestedValue: proposed,
+                        operativeValue: current,
+                        reason: "no change: move \((delta * 100).rounded() / 100) within the ±\(band) noise band (accumulating)"
+                    ))
+                    continue
+                }
+            }
+
+            // A rising hypo caution is a tightening; for the caps a rise is a loosening.
+            let loosening = knob == .hypoCaution ? delta < 0 : delta > 0
+            if loosening, doseCapKnobs.contains(knob), raiseGuard {
+                setPending(knob, nil)
+                out.append(Resolution(
+                    knob: knob, outcome: .suggestedNotAppliedTbr, suggestedValue: proposed,
+                    operativeValue: current,
+                    reason: "raise held: \(current) → \(proposed); TBR<70=\(tbrBelow70Pct)% <54=\(timeBelow54Pct)%"
+                ))
+                continue
+            }
+
+            put(knob, proposed)
+            // Advance the baseline by the movement ACTUALLY APPLIED, not by the movement derived.
+            // When the step cap clips a large move, advancing to the newly derived value would
+            // discard the remainder and strand the knob short of its target: an insulin
+            // concentration change that doubles the dose in units would move a cap by a quarter once
+            // and then stop, about 40% below where it belongs. Advancing proportionally leaves the
+            // residual in place. Unclipped moves are unaffected, since proposed over current then
+            // equals derivedNow over baseline and this reduces to derivedNow exactly.
+            let appliedBaseline: Double = redriveRatioKnobs.contains(knob)
+                ? (abs(current) > Self.defaultEps ? baseline * (proposed / current) : derivedNow)
+                : baseline + (proposed - current)
+            setBaseline(knob, appliedBaseline)
+            setPending(knob, nil)
+            operative[knob] = proposed
+            out.append(Resolution(
+                knob: knob, outcome: .redriven, suggestedValue: proposed, operativeValue: proposed,
+                reason: "tracked \(current) → \(proposed) (derivation moved \(baseline) → \(derivedNow))"
+            ))
+        }
+
+        // The computed knobs follow the operative caps, exactly as the derivation computes them, so
+        // they can never drift out of step with the caps they bound.
+        let currentCum = operative[.cumulativeSmbCap60Min]!
+        let newCum = BoostV5AutoConfig.cumulativeCap60Min(
+            confirmedCapU: operative[.confirmedCapU]!,
+            committedCapU: operative[.committedCapU]!
+        )
+        if abs(newCum - currentCum) > Self.defaultEps {
+            if newCum > currentCum, raiseGuard {
+                out.append(Resolution(
+                    knob: .cumulativeSmbCap60Min, outcome: .suggestedNotAppliedTbr,
+                    suggestedValue: newCum, operativeValue: currentCum,
+                    reason: "raise held: \(currentCum) → \(newCum); TBR<70=\(tbrBelow70Pct)%"
+                ))
+            } else {
+                put(.cumulativeSmbCap60Min, newCum)
+                out.append(Resolution(
+                    knob: .cumulativeSmbCap60Min, outcome: .redriven, suggestedValue: newCum,
+                    operativeValue: newCum,
+                    reason: "recomputed \(currentCum) → \(newCum) from the operative caps"
+                ))
+            }
+        }
+        // The primer ceiling is a fraction of the committed cap. The fraction comes from the
+        // derivation so the hypo-prone and well-controlled policy is not duplicated here. It does
+        // not pass through the raise guard, matching the onboarding path: the primer's safety is its
+        // delivery routing rather than a cap.
+        if suggestion.committedCapU > 0 {
+            let frac = suggestion.primerCapU / suggestion.committedCapU
+            let currentPrimer = operative[.primerCapU]!
+            let raw = operative[.committedCapU]! * frac
+            let newPrimer = (min(max(raw, 0), operative[.committedCapU]!) * 100).rounded() / 100
+            if abs(newPrimer - currentPrimer) > redrivePrimerDeadband {
+                put(.primerCapU, newPrimer)
+                out.append(Resolution(
+                    knob: .primerCapU, outcome: .redriven, suggestedValue: newPrimer,
+                    operativeValue: newPrimer,
+                    reason: "recomputed \(currentPrimer) → \(newPrimer) from the committed cap"
+                ))
+            }
+        }
+        return out
     }
 
     /// Auto-config persistence schema version — THE single hook future re-migrations plug into

@@ -496,6 +496,16 @@ final class BaseAPSManager: APSManager, Injectable {
         // (oref) dosing history. Guarded + self-contained; never throws into the dose path.
         await maybeAutoConfigureBoostV5()
 
+        // Periodic re-derivation, every 7 days over a 28-day window (AAPS 2026-08-03). Detached
+        // deliberately: the derivation reads a month of glucose and pump history, and nothing that
+        // large belongs on the dose path. AAPS moved it off for the same reason. A failure is
+        // swallowed, so it can never affect this cycle.
+        if settingsManager.preferences.boostMode == .active, BoostRedriveStore.isDue(now: Date()) {
+            Task.detached(priority: .utility) { [weak self] in
+                await self?.redriveBoostAutoConfig()
+            }
+        }
+
         try await calculateAndStoreTDD()
 
         var invalidGlucoseError: String?
@@ -1181,6 +1191,113 @@ final class BaseAPSManager: APSManager, Injectable {
     /// NOTE: written against verified Trio APIs but NOT yet compiled in Xcode — confirm the field
     /// names `PumpHistoryEvent.timestamp`, `GlucoseStored.glucose`/`.date`, and `pumpSettings.maxBolus`
     /// on first build.
+    /// Periodic re-derivation of the derived Boost knobs (AAPS 2026-08-03, second revision).
+    ///
+    /// Runs off the dose path on a 7-day cadence over a 28-day window. The decision is entirely in
+    /// the unit-tested `BoostV5AutoConfigApply.redrive`; this gathers the history, supplies the
+    /// baseline and pending ledgers, and writes what it is told to. Every failure is logged and
+    /// swallowed.
+    ///
+    /// Note the window differs from onboarding's 14 days. Two independent 14-day derivations of the
+    /// same fortnight differ by 0.69 U [0.30, 1.17] on the confirmed cap, which is noise-dominated
+    /// for tracking a drift.
+    private func redriveBoostAutoConfig() async {
+        BoostRedriveStore.markRun(now: Date())
+        do {
+            let since = Date().addingTimeInterval(-Double(BoostRedriveStore.windowDays) * 86400)
+            let glucoseContext = CoreDataStack.shared.newTaskContext()
+            glucoseContext.name = "boostRedriveGlucose"
+            let summary: (values: [Int], firstDate: Date)? = try await glucoseContext.perform {
+                let glucose = try self.fetchGlucose(
+                    on: glucoseContext,
+                    predicate: NSPredicate(format: "date >= %@", since as NSDate),
+                    fetchLimit: 12000
+                )
+                let values = glucose.compactMap { Int($0.glucose) }.filter { (20 ... 600).contains($0) }
+                guard !values.isEmpty else { return nil }
+                return (values, glucose.compactMap(\.date).min() ?? since)
+            }
+            guard let summary else {
+                debug(.apsManager, "BoostV5 re-derivation: no glucose in the window — skipped")
+                return
+            }
+            let values = summary.values
+            let n = values.count
+            let tbr70 = 100.0 * Double(values.filter { $0 < 70 }.count) / Double(n)
+            let sev54 = 100.0 * Double(values.filter { $0 < 54 }.count) / Double(n)
+            let meanBg = Double(values.reduce(0, +)) / Double(n)
+            let daysWithData = max(1, Int(Date().timeIntervalSince(summary.firstDate) / 86400))
+
+            let history = (try? await pumpHistoryStorage.getPumpHistory()) ?? []
+            let recent = history.filter { $0.timestamp >= since && ($0.type == .bolus || $0.type == .smb) }
+            func amt(_ e: PumpHistoryEvent) -> Double? {
+                e.amount.map { Double(truncating: $0 as NSNumber) }.flatMap { $0 > 0 ? $0 : nil }
+            }
+            let smb = recent.filter { $0.isSMB == true || $0.type == .smb }.compactMap(amt)
+            let manual = recent.filter { !($0.isSMB == true || $0.type == .smb) }.compactMap(amt)
+
+            var tddMedian = (smb + manual).reduce(0, +) / Double(daysWithData)
+            if let pm = pumpManager {
+                let windowHistory = history.filter { $0.timestamp >= since }
+                let basalProfile = (try? await storage.retrieveAsync(
+                    OpenAPS.Settings.basalProfile, as: [BasalProfileEntry].self
+                )) ?? []
+                if let tdd = try? await tddStorage.calculateTDD(
+                    pumpManager: pm, pumpHistory: windowHistory, basalProfile: basalProfile
+                ) {
+                    let daily = Double(truncating: tdd.total as NSNumber) / Double(daysWithData)
+                    if (5.0 ... 200.0).contains(daily) { tddMedian = daily }
+                }
+            }
+
+            let maxIob = Double(truncating: settingsManager.preferences.maxIOB as NSNumber)
+            let maxBolus = Double(truncating: settingsManager.pumpSettings.maxBolus as NSNumber)
+            guard let s = BoostV5AutoConfig.compute(BoostV5AutoConfig.PriorDosing(
+                daysWithData: daysWithData, bgReadingCount: n, tddMedianU: tddMedian,
+                manualBolusesU: manual, smbAmountsU: smb,
+                tbrBelow70Pct: tbr70, timeBelow54Pct: sev54, meanGlucoseMgdl: meanBg,
+                currentMaxIobU: maxIob, currentMaxBolusU: maxBolus
+            )) else {
+                debug(.apsManager, "BoostV5 re-derivation: insufficient history (days=\(daysWithData), bg=\(n))")
+                return
+            }
+
+            var prefs = settingsManager.preferences
+            let stock = Preferences()
+            let resolutions = BoostV5AutoConfigApply.redrive(
+                suggestion: s,
+                tbrBelow70Pct: tbr70,
+                timeBelow54Pct: sev54,
+                storedValue: { Self.boostKnobValue($0, prefs) },
+                currentDefault: { Self.boostKnobValue($0, stock) },
+                baselineValue: { BoostRedriveStore.baseline($0) },
+                pendingValue: { BoostRedriveStore.pending($0) },
+                put: { knob, value in
+                    switch knob {
+                    case .aggression: prefs.boostV5Aggression = Decimal(value)
+                    case .hypoCaution: prefs.boostV5HypoCaution = Decimal(value)
+                    case .confirmedCapU: prefs.boostV5ConfirmedCapU = Decimal(value)
+                    case .committedCapU: prefs.boostV5CommittedCapU = Decimal(value)
+                    case .cumulativeSmbCap60Min: prefs.boostCumulativeSmbCap60Min = Decimal(value)
+                    case .primerCapU: prefs.boostV5PrimerCapU = Decimal(value)
+                    case .aggressiveEarlyConfirm,
+                         .fastCarbConfirm,
+                         .primerTbrFallback,
+                         .velocityBudgetFloor: break // boolean knobs are not re-derived
+                    }
+                },
+                setBaseline: { BoostRedriveStore.setBaseline($0, $1) },
+                setPending: { BoostRedriveStore.setPending($0, $1) }
+            )
+            settingsManager.preferences = prefs
+            for r in resolutions {
+                debug(.apsManager, "BoostV5 re-derivation: \(r.knob.rawValue) → \(r.reason)")
+            }
+        } catch {
+            debug(.apsManager, "BoostV5 re-derivation failed (non-fatal): \(error)")
+        }
+    }
+
     private func maybeAutoConfigureBoostV5() async {
         guard settingsManager.preferences.boostMode == .active else { return }
 
