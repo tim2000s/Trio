@@ -92,10 +92,25 @@ public enum BoostMlFeatureBuilder {
             // Admit a snapshot only once per lag interval, so the buffer holds five-minute steps
             // even when called every minute. Replace the newest when called again too soon, so the
             // freshest reading within the interval is the one kept.
+            //
+            // The slot keeps the timestamp that OPENED the interval rather than taking the
+            // replacement's. This is a deliberate divergence from the Kotlin, which assigns the
+            // whole snapshot and so moves the anchor forward on every replacement: the spacing is
+            // then measured from the most recent replacement and never reaches the interval, so a
+            // feed arriving every minute replaces one slot indefinitely and no second slot is ever
+            // opened. Every lag then resolves to nil and the caller falls back to the current
+            // cycle, which is the opposite of what the resampling exists to achieve. Anchoring on
+            // the interval's opening timestamp makes a one-minute feed accumulate six slots five
+            // minutes apart, which is the spacing the model was trained on.
+            //
+            // A five-minute feed is unaffected: each push opens its own slot, so no replacement
+            // happens and the anchor question does not arise.
             if let last = snapshots.last,
                s.ts - last.ts < BoostMlFeatureBuilder.lagSpacingMs - BoostMlFeatureBuilder.lagSpacingToleranceMs
             {
-                snapshots[snapshots.count - 1] = s
+                var replacement = s
+                replacement.ts = last.ts
+                snapshots[snapshots.count - 1] = replacement
                 return
             }
             snapshots.append(s)

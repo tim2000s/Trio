@@ -47,22 +47,33 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
         XCTAssertEqual(ring.snapshots.count, 2)
     }
 
-    func testAContinuousOneMinuteFeedCollapsesToASingleSlot() {
-        // Faithful to the Kotlin, and worth stating plainly because it is not what the commit
-        // message describes. The replacement overwrites the slot's timestamp too, so the interval
-        // is measured from the most recent replacement and never advances: a feed arriving every
-        // minute replaces the same slot indefinitely and no second slot is ever opened. The lags
-        // then resolve to nil, which the caller renders as a fall back to the current cycle.
-        //
-        // It does not bite at the shipped defaults, because the loop trigger still steps every five
-        // minutes unless the native-cadence preference is on, and that preference is the
-        // experimental fast arm. Raised here rather than silently corrected: changing it would
-        // diverge from the Kotlin, and which behaviour is wanted is a question for the algorithm.
+    func testAContinuousOneMinuteFeedAccumulatesTheFullLookback() {
+        // Trio anchors each slot on the timestamp that opened its interval. The Kotlin assigns the
+        // replacement whole, which moves the anchor forward every minute so the spacing never
+        // reaches the interval: one slot is replaced indefinitely, no second slot opens, and every
+        // lag falls back to the current cycle. That is the opposite of what the resampling is for.
         var ring = B.RingBuffer()
         for minute in 0 ... 40 { ring.push(snapAtMinute(Double(minute), 100 + Double(minute))) }
+        XCTAssertEqual(ring.snapshots.count, B.lookback)
+        let span = (ring.lagged(0)!.ts - ring.lagged(B.lookback - 1)!.ts) / 60000
+        XCTAssertEqual(span, 25, accuracy: 0.001, "six slots five minutes apart")
+        // Each slot holds the freshest reading from its own interval. The newest slot opened at
+        // minute 40 and the feed stops there, so it holds that reading; the one before it spans
+        // minutes 35 to 39 and holds the last of those.
+        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 140)
+        XCTAssertEqual(ring.lagged(1)?.cgmMgdl, 139)
+    }
+
+    func testTheSlotKeepsTheTimestampThatOpenedItsInterval() {
+        var ring = B.RingBuffer()
+        ring.push(snapAtMinute(0, 100))
+        ring.push(snapAtMinute(3, 103))
         XCTAssertEqual(ring.snapshots.count, 1)
-        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 140, "the freshest reading")
-        XCTAssertNil(ring.lagged(1))
+        XCTAssertEqual(ring.lagged(0)?.ts, 0, "anchored on the opening timestamp")
+        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 103, "holding the freshest reading")
+        // So the next interval still opens on time rather than being pushed out by the replacement.
+        ring.push(snapAtMinute(5, 105))
+        XCTAssertEqual(ring.snapshots.count, 2)
     }
 
     func testAFiveMinuteFeedAccumulatesTheFullLookback() {
