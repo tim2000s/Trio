@@ -164,6 +164,11 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
     public var primerIobU: Double = 0
     /// Epoch-ms the accumulator was last updated, for the decay. 0 means never.
     public var primerIobUpdatedMs: Double = 0
+    /// Epoch-ms anchor for the ML null-streak tick (AAPS 2026-08-01). The renormalise threshold
+    /// counts cycles and is meant to be about fifteen minutes of a missing model, which is three
+    /// minutes on a one-minute feed unless the count is gated on elapsed time the way the
+    /// meal-state ages are. Last in the list, since this type is constructed positionally.
+    public var mlNullStreakLastMs: Double = 0
 
     enum CodingKeys: String, CodingKey {
         // lastCycleScore intentionally omitted — in-memory only (see its doc comment).
@@ -174,6 +179,7 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
         case primerNettingResidualU
         case primerIobU
         case primerIobUpdatedMs
+        case mlNullStreakLastMs
     }
 
     public init(
@@ -184,7 +190,8 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
         primerAppliedU: Double = 0,
         primerNettingResidualU: Double = 0,
         primerIobU: Double = 0,
-        primerIobUpdatedMs: Double = 0
+        primerIobUpdatedMs: Double = 0,
+        mlNullStreakLastMs: Double = 0
     ) {
         self.mealHypothesis = mealHypothesis
         self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
@@ -194,6 +201,7 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
         self.primerNettingResidualU = primerNettingResidualU
         self.primerIobU = primerIobU
         self.primerIobUpdatedMs = primerIobUpdatedMs
+        self.mlNullStreakLastMs = mlNullStreakLastMs
     }
 }
 
@@ -248,7 +256,14 @@ public enum BoostV5Engine {
             loopSuspended: inputs.loopSuspended, timeJumpMinutes: inputs.timeJumpMinutes
         )
 
-        let nextNullStreak = inputs.mlMealLikely == nil ? persisted.mlMealLikelyNullStreak + 1 : 0
+        // Count elapsed time rather than invocations, as the meal-state ages do.
+        let nullStreakTick = inputs.nowMs <= 0 || persisted.mlNullStreakLastMs <= 0
+            || (inputs.nowMs - persisted.mlNullStreakLastMs) >= MealHypothesisConstants.ageTickMs
+        let nextNullStreak = inputs.mlMealLikely == nil
+            ? (nullStreakTick ? persisted.mlMealLikelyNullStreak + 1 : persisted.mlMealLikelyNullStreak)
+            : 0
+        let nextNullStreakMs: Double = (inputs.mlMealLikely == nil && inputs.nowMs > 0 && nullStreakTick)
+            ? inputs.nowMs : persisted.mlNullStreakLastMs
         let scoreResult = MealSignalScoreEngine.mealSignalScore(
             delta: inputs.delta, deltaAccl: inputs.deltaAccl, mlMealLikely: inputs.mlMealLikely,
             recentLowBg: inputs.recentLowBg, hour: inputs.hour, exerciseActive: inputs.exerciseActive,
@@ -306,7 +321,8 @@ public enum BoostV5Engine {
             ),
             confirmDoseAdequate: confirmDoseAdequate,
             scoreReadyStreak: scoreReadyStreak, // 2026-07-03 sustained-score early confirm (hoisted above)
-            aggressiveEarlyConfirm: inputs.aggressiveEarlyConfirmEnabled // 2026-07-17 opt-in, one cycle earlier
+            aggressiveEarlyConfirm: inputs.aggressiveEarlyConfirmEnabled, // 2026-07-17 opt-in, one cycle earlier
+            nowMs: inputs.nowMs // 2026-07-30 wall-clock age tick
         )
 
         // Early primer (AAPS 2026-07-20). Computed here, where the state is known, and applied
@@ -501,7 +517,8 @@ public enum BoostV5Engine {
                 primerAppliedU: primerAppliedU,
                 primerNettingResidualU: primerNettingResidualU,
                 primerIobU: primerIobU,
-                primerIobUpdatedMs: primerIobUpdatedMs
+                primerIobUpdatedMs: primerIobUpdatedMs,
+                mlNullStreakLastMs: nextNullStreakMs
             )
         )
     }

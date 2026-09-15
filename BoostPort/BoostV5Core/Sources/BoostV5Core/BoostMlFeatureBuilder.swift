@@ -23,6 +23,14 @@ public enum BoostMlFeatureBuilder {
     /// minutes, so anything older than thirty-five is not the preceding six cycles and must not be
     /// presented to the model as though it were. (AAPS `STALE_AFTER_MS`, 2026-08-14.)
     public static let staleAfterMs: Double = 35 * 60 * 1000
+
+    /// Spacing the lookback window assumes between snapshots. The lag COUNT is part of the model:
+    /// six lags were trained on five-minute spacing, so at a one-minute cadence the same six lags
+    /// would span six minutes rather than thirty and the model would extrapolate from inputs unlike
+    /// anything it saw in training. This is the one count-based window in the one-minute work that
+    /// must not simply be retimed, so the input is resampled instead. (AAPS 2026-08-01.)
+    public static let lagSpacingMs: Double = 5 * 60 * 1000
+    private static let lagSpacingToleranceMs: Double = 30 * 1000
     public static let lookbackFeatures = [
         "cgm_mgdl", "iob_iob", "iob_activity",
         "sug_eventualBG", "recent_smb_units_60m", "sug_minDelta"
@@ -81,6 +89,15 @@ public enum BoostMlFeatureBuilder {
         /// a break, and between 100 and 160 mg/dL they crossed the 0.30 damper threshold on 8.6% of
         /// cycles against 3.9% for the rest. (AAPS 2026-08-14.)
         public mutating func push(_ s: CycleSnapshot) {
+            // Admit a snapshot only once per lag interval, so the buffer holds five-minute steps
+            // even when called every minute. Replace the newest when called again too soon, so the
+            // freshest reading within the interval is the one kept.
+            if let last = snapshots.last,
+               s.ts - last.ts < BoostMlFeatureBuilder.lagSpacingMs - BoostMlFeatureBuilder.lagSpacingToleranceMs
+            {
+                snapshots[snapshots.count - 1] = s
+                return
+            }
             snapshots.append(s)
             let oldest = s.ts - BoostMlFeatureBuilder.staleAfterMs
             snapshots.removeAll { $0.ts < oldest }

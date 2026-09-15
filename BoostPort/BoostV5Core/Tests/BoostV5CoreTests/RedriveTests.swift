@@ -188,3 +188,108 @@ final class RedriveTests: XCTestCase {
         XCTAssertEqual(store.value[.cumulativeSmbCap60Min]!, 3.0, accuracy: 1E-9)
     }
 }
+
+/// Wall-clock cadence invariance for the meal-state ages and the ML null streak
+/// (AAPS 0b1587f6b6 and cac09593ee).
+final class CadenceInvarianceTests: XCTestCase {
+    private let t0: Double = 1_700_000_000_000
+    private func mins(_ m: Double) -> Double { t0 + m * 60000 }
+
+    private func observing(lastAgeMs: Double) -> MealHypothesisState {
+        MealHypothesisState(state: .observing, ageCycles: 0, lastAgeMs: lastAgeMs)
+    }
+
+    /// A cycle that keeps the state in OBSERVING: a modest rise, nothing that confirms or resets.
+    private func step(_ current: MealHypothesisState, nowMs: Double) -> MealHypothesisState {
+        MealHypothesisEngine.step(
+            current: current, score: 0.5, eventualBg: 140, targetBg: 100,
+            delta: 3, deltaAccl: 5, deltaDeclining: false, nowMs: nowMs
+        )
+    }
+
+    func testTheAgeAdvancesOnceEveryFourMinutes() {
+        var s = observing(lastAgeMs: t0)
+        s = step(s, nowMs: mins(1))
+        XCTAssertEqual(s.ageCycles, 0, "a one-minute cycle does not advance the age")
+        s = step(s, nowMs: mins(2))
+        XCTAssertEqual(s.ageCycles, 0)
+        s = step(s, nowMs: mins(4))
+        XCTAssertEqual(s.ageCycles, 1)
+    }
+
+    func testAFiveMinuteFeedAdvancesEveryCycle() {
+        // Four minutes rather than five, deliberately: live five-minute users increment about every
+        // 4.85 to 5.0 minutes, so a five-minute tick would intermittently skip and slow the whole
+        // existing cohort from ten minutes to fifteen.
+        var s = observing(lastAgeMs: t0)
+        for cycle in 1 ... 3 {
+            s = step(s, nowMs: mins(Double(cycle) * 4.85))
+            XCTAssertEqual(s.ageCycles, cycle, "cycle \(cycle)")
+        }
+    }
+
+    func testAOneMinuteFeedReachesTheConfirmAgeInAboutEightMinutes() {
+        // Against two minutes without the tick, and ten for a five-minute user.
+        var s = observing(lastAgeMs: t0)
+        var minute = 0.0
+        while s.ageCycles < 2, minute < 60 {
+            minute += 1
+            s = step(s, nowMs: mins(minute))
+        }
+        XCTAssertEqual(minute, 8, accuracy: 0.001)
+    }
+
+    func testWithoutAClockTheBehaviourIsUnchanged() {
+        // Legacy callers and tests pass no clock, so the age ticks on every call exactly as before.
+        var s = MealHypothesisState(state: .observing, ageCycles: 0)
+        for cycle in 1 ... 3 {
+            s = step(s, nowMs: 0)
+            XCTAssertEqual(s.ageCycles, cycle)
+        }
+    }
+
+    func testAStateChangeRestampsTheAnchor() {
+        let s = observing(lastAgeMs: t0)
+        let confirmed = MealHypothesisEngine.step(
+            current: MealHypothesisState(
+                state: .observing, ageCycles: 3, maxScoreInObserving: 1.0,
+                maxEventualBgOffsetInObserving: 90, lastAgeMs: t0
+            ),
+            score: 1.0, eventualBg: 200, targetBg: 100, delta: 8, deltaAccl: 20,
+            deltaDeclining: false, nowMs: mins(3)
+        )
+        XCTAssertEqual(confirmed.state, .confirmed)
+        XCTAssertEqual(confirmed.lastAgeMs, mins(3), "the new state's clock starts now")
+        XCTAssertEqual(s.lastAgeMs, t0)
+    }
+
+    func testTheMlNullStreakCountsElapsedTimeRatherThanInvocations() {
+        // The renormalise threshold is three cycles, meant to be about fifteen minutes of a missing
+        // model. Ungated that is three minutes on a one-minute feed.
+        func inputs(nowMs: Double) -> V5Inputs {
+            V5Inputs(
+                delta: 1, shortAvgDelta: 1, deltaAccl: 0, bg: 120, eventualBg: 120, targetBg: 100,
+                maxDelta: 1, minGuardBg: 120, minGuardThreshold: 80, deltaHistory: [1, 1, 1],
+                iob: 0.3, maxIob: 6, baseInsulinReq: 0.5, roundSmbTo: 0.05, enableSmbPreChecks: true,
+                mlHypoRisk: nil, mlMealLikely: nil, recentLowBg: 110, cumulativeRise30min: 3,
+                hour: 13, exerciseActive: false, inPostExerciseWindow: false, asleep: false,
+                nowMs: nowMs
+            )
+        }
+        var persisted = V5PersistedState()
+        // Five one-minute cycles advance the streak twice, not five times: the first cycle ticks
+        // because nothing is stamped yet, and the fifth ticks four minutes after that stamp.
+        for minute in 1 ... 5 {
+            persisted = BoostV5Engine.decide(inputs(nowMs: mins(Double(minute))), persisted: persisted)
+                .newPersistedState
+        }
+        XCTAssertEqual(persisted.mlMealLikelyNullStreak, 2)
+
+        // Without a clock the count is one per invocation, as before.
+        var ungated = V5PersistedState()
+        for _ in 1 ... 5 {
+            ungated = BoostV5Engine.decide(inputs(nowMs: 0), persisted: ungated).newPersistedState
+        }
+        XCTAssertEqual(ungated.mlMealLikelyNullStreak, 5)
+    }
+}

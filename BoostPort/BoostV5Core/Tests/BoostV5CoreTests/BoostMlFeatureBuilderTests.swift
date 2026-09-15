@@ -17,6 +17,63 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
         snap(minute * 60000, cgm)
     }
 
+    // MARK: - Lag resampling (AAPS 2026-08-01)
+
+    func testASecondPushInsideTheLagIntervalReplacesRatherThanAppends() {
+        // At a one-minute sensor cadence the engine runs five times as often, but the six lags were
+        // trained on five-minute spacing. The lag count is part of the model, so the input is
+        // resampled: one slot per interval, holding the freshest reading within it.
+        var ring = B.RingBuffer()
+        ring.push(snapAtMinute(0, 100))
+        for minute in 1 ... 4 { ring.push(snapAtMinute(Double(minute), 100 + Double(minute))) }
+        XCTAssertEqual(ring.snapshots.count, 1)
+        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 104, "the freshest reading in the interval")
+    }
+
+    func testAPushAtTheIntervalOpensANewSlot() {
+        var ring = B.RingBuffer()
+        ring.push(snapAtMinute(0, 100))
+        ring.push(snapAtMinute(5, 105))
+        XCTAssertEqual(ring.snapshots.count, 2)
+        XCTAssertEqual(ring.lagged(1)?.cgmMgdl, 100)
+    }
+
+    func testTheSpacingToleranceAdmitsASlightlyEarlyCycle() {
+        // Cycles do not land exactly on the interval, so half a minute of tolerance keeps a
+        // five-minute feed opening a new slot every cycle rather than overwriting every other one.
+        var ring = B.RingBuffer()
+        ring.push(snapAtMinute(0, 100))
+        ring.push(snapAtMinute(4.9, 105))
+        XCTAssertEqual(ring.snapshots.count, 2)
+    }
+
+    func testAContinuousOneMinuteFeedCollapsesToASingleSlot() {
+        // Faithful to the Kotlin, and worth stating plainly because it is not what the commit
+        // message describes. The replacement overwrites the slot's timestamp too, so the interval
+        // is measured from the most recent replacement and never advances: a feed arriving every
+        // minute replaces the same slot indefinitely and no second slot is ever opened. The lags
+        // then resolve to nil, which the caller renders as a fall back to the current cycle.
+        //
+        // It does not bite at the shipped defaults, because the loop trigger still steps every five
+        // minutes unless the native-cadence preference is on, and that preference is the
+        // experimental fast arm. Raised here rather than silently corrected: changing it would
+        // diverge from the Kotlin, and which behaviour is wanted is a question for the algorithm.
+        var ring = B.RingBuffer()
+        for minute in 0 ... 40 { ring.push(snapAtMinute(Double(minute), 100 + Double(minute))) }
+        XCTAssertEqual(ring.snapshots.count, 1)
+        XCTAssertEqual(ring.lagged(0)?.cgmMgdl, 140, "the freshest reading")
+        XCTAssertNil(ring.lagged(1))
+    }
+
+    func testAFiveMinuteFeedAccumulatesTheFullLookback() {
+        // The cadence the model was trained on, and the one the shipped loop trigger produces.
+        var ring = B.RingBuffer()
+        for step in 0 ... 8 { ring.push(snapAtMinute(Double(step) * 5, 100 + Double(step))) }
+        XCTAssertEqual(ring.snapshots.count, B.lookback)
+        let span = (ring.lagged(0)!.ts - ring.lagged(B.lookback - 1)!.ts) / 60000
+        XCTAssertEqual(span, 25, accuracy: 0.001, "six slots five minutes apart")
+    }
+
     func testRingBufferDropsSnapshotsOlderThanTheLookbackWindow() {
         var ring = B.RingBuffer()
         // Five contiguous cycles on the five-minute grid, then a two-hour break.
@@ -67,7 +124,9 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
 
     func testRingBufferLaggedAndCap() {
         var ring = B.RingBuffer()
-        for i in 0 ..< 8 { ring.push(snap(Double(i), 100 + Double(i))) }
+        // Five-minute spacing, which is what the lookback window models. Pushing at millisecond
+        // spacing would now resample into a single slot (see the lag-spacing tests below).
+        for i in 0 ..< 8 { ring.push(snap(Double(i) * B.lagSpacingMs, 100 + Double(i))) }
         // Capped at 6 entries — oldest dropped.
         XCTAssertEqual(ring.snapshots.count, B.lookback)
         // lag0 = most recent (cgm 107), lag5 = 6th from end (cgm 102).
@@ -80,7 +139,7 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
     func testBuildStaticAndLagMapping() {
         var ring = B.RingBuffer()
         ring.push(snap(0, 100)) // lag1 after current push
-        let current = snap(1, 120)
+        let current = snap(B.lagSpacingMs, 120)
         ring.push(current) // lag0
         let names = ["cgm_mgdl", "bg_above_target", "cgm_mgdl_lag0", "cgm_mgdl_lag1", "sug_minDelta_lag0"]
         let statics: [String: Double] = ["cgm_mgdl": 120, "bg_above_target": 20]
@@ -112,8 +171,8 @@ final class BoostMlFeatureBuilderTests: XCTestCase {
 
     func testSerializeRoundTrip() {
         var ring = B.RingBuffer()
-        ring.push(snap(10, 110))
-        ring.push(snap(20, 120))
+        ring.push(snap(0, 110))
+        ring.push(snap(B.lagSpacingMs, 120))
         let restored = B.deserialize(B.serialize(ring))
         XCTAssertEqual(restored.snapshots.count, 2)
         XCTAssertEqual(restored.lagged(0)?.cgmMgdl, 120)

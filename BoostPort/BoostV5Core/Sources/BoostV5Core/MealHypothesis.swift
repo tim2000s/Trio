@@ -14,19 +14,31 @@ public struct MealHypothesisState: Codable, Equatable, Sendable {
     public var maxScoreInObserving: Double
     public var maxEventualBgOffsetInObserving: Double
     public var committedInSession: Bool
+    /// Epoch-ms anchor for the wall-clock age tick (AAPS 0b1587f6b6). The ages are cycle counts
+    /// with thresholds tuned on a five-minute loop, so at a one-minute sensor cadence the loop runs
+    /// five times as often and the same counts elapse five times sooner. Measured on live data, the
+    /// time from entering OBSERVING to age 2 is 10.0 min (p10 9.7 to 10.0) for every five-minute
+    /// user and 2.0 min for the one-minute user. Anchoring the advance on wall clock makes the
+    /// thresholds mean the same thing at any cadence. 0 means never stamped.
+    ///
+    /// Last in the parameter list on purpose: existing call sites construct this positionally, and
+    /// inserting a field mid-list would silently rebind their arguments.
+    public var lastAgeMs: Double
 
     public init(
         state: MealHypothesis = .idle,
         ageCycles: Int = 0,
         maxScoreInObserving: Double = 0.0,
         maxEventualBgOffsetInObserving: Double = 0.0,
-        committedInSession: Bool = false
+        committedInSession: Bool = false,
+        lastAgeMs: Double = 0
     ) {
         self.state = state
         self.ageCycles = ageCycles
         self.maxScoreInObserving = maxScoreInObserving
         self.maxEventualBgOffsetInObserving = maxEventualBgOffsetInObserving
         self.committedInSession = committedInSession
+        self.lastAgeMs = lastAgeMs
     }
 }
 
@@ -35,6 +47,16 @@ public enum MealHypothesisConstants {
     public static let enterObservingScore = 0.44
     public static let confirmScore = 0.55
     public static let confirmEventualBgOffsetMgdl = 30.0
+    /// Minimum wall-clock spacing between age increments (AAPS `AGE_TICK_MS`, 2026-07-30).
+    ///
+    /// Four minutes rather than five, deliberately. Live five-minute users increment about every
+    /// 4.85 to 5.0 minutes, so a five-minute tick would intermittently skip an increment and slow
+    /// the whole existing cohort from 10 minutes to 15. Four minutes clears their observed p10 with
+    /// about 0.85 minutes of margin. The cost is that a one-minute user reaches age 2 at about 8
+    /// minutes rather than 10, which is 80% of the target and four times better than the 2.0
+    /// minutes measured without it.
+    public static let ageTickMs: Double = 4 * 60 * 1000
+
     public static let confirmMinObservingAge = 2
     /// 2026-07-03 sustained-score early confirm (AAPS 242a6e179d): OBSERVING → CONFIRMED may fire
     /// ONE cycle before `confirmMinObservingAge` when the INSTANTANEOUS score has been ≥
@@ -184,8 +206,19 @@ public enum MealHypothesisEngine {
         scoreReadyStreak: Bool = false,
         /// Aggressive early-confirm opt-in (auto-config managed). False keeps the audit-validated
         /// timing for every existing caller.
-        aggressiveEarlyConfirm: Bool = false
+        aggressiveEarlyConfirm: Bool = false,
+        /// Wall clock for the age tick, epoch-ms. 0 (tests and legacy callers) or a never-stamped
+        /// state ticks on every call, preserving the previous behaviour exactly.
+        nowMs: Double = 0
     ) -> MealHypothesisState {
+        // Wall-clock age tick (AAPS 0b1587f6b6). Ages are cycle counts tuned on a five-minute loop,
+        // so gating them on elapsed time stops a one-minute loop advancing them five times too fast.
+        let ageTick = nowMs <= 0 || current.lastAgeMs <= 0
+            || (nowMs - current.lastAgeMs) >= MealHypothesisConstants.ageTickMs
+        let bumped = ageTick ? 1 : 0
+        let tickMs = (ageTick && nowMs > 0) ? nowMs : current.lastAgeMs
+        // A state change always re-stamps the anchor: the new state's clock starts now.
+        let enterMs = nowMs > 0 ? nowMs : current.lastAgeMs
         let C = MealHypothesisConstants.self
         let state = current.state
         let age = current.ageCycles
@@ -201,17 +234,17 @@ public enum MealHypothesisEngine {
         switch state {
         case .idle:
             if fastConfirm {
-                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else if score >= C.enterObservingScore {
                 return MealHypothesisState(
                     state: .observing,
                     ageCycles: 0,
                     maxScoreInObserving: score,
                     maxEventualBgOffsetInObserving: currentOffset,
-                    committedInSession: false
+                    committedInSession: false, lastAgeMs: enterMs
                 )
             } else {
-                return MealHypothesisState(state: state, ageCycles: age + 1)
+                return MealHypothesisState(state: state, ageCycles: age + bumped, lastAgeMs: tickMs)
             }
 
         case .observing:
@@ -227,34 +260,34 @@ public enum MealHypothesisEngine {
                 aggressiveEarlyConfirm: aggressiveEarlyConfirm
             ) && confirmDoseAdequate // 2026-07-02: don't spend the token on a shot < one COMMITTED hold
             if fastConfirm, !committedInSession {
-                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else if confirmEligible {
-                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .confirmed, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else if score < C.fallBackToIdleScore, age >= C.fallBackToIdleAge {
-                return MealHypothesisState(state: .idle, ageCycles: 0)
+                return MealHypothesisState(state: .idle, ageCycles: 0, lastAgeMs: enterMs)
             } else {
                 return MealHypothesisState(
                     state: state,
-                    ageCycles: age + 1,
+                    ageCycles: age + bumped,
                     maxScoreInObserving: newMaxScore,
                     maxEventualBgOffsetInObserving: newMaxOffset,
-                    committedInSession: committedInSession
+                    committedInSession: committedInSession, lastAgeMs: tickMs
                 )
             }
 
         case .confirmed:
             if age >= C.confirmedToCommittedAge {
-                return MealHypothesisState(state: .committed, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .committed, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else {
-                return MealHypothesisState(state: state, ageCycles: age + 1, committedInSession: true)
+                return MealHypothesisState(state: state, ageCycles: age + bumped, committedInSession: true, lastAgeMs: tickMs)
             }
 
         case .committed:
             let backOff = deltaAccl < C.recoveringDecelThreshold && deltaDeclining
             if backOff {
-                return MealHypothesisState(state: .recovering, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .recovering, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else {
-                return MealHypothesisState(state: state, ageCycles: age + 1, committedInSession: true)
+                return MealHypothesisState(state: state, ageCycles: age + bumped, committedInSession: true, lastAgeMs: tickMs)
             }
 
         case .recovering:
@@ -263,11 +296,11 @@ public enum MealHypothesisEngine {
                 delta > C.recoveringReengageDelta &&
                 currentOffset > C.recoveringReengageOffsetMgdl
             if reEngage {
-                return MealHypothesisState(state: .committed, ageCycles: 0, committedInSession: true)
+                return MealHypothesisState(state: .committed, ageCycles: 0, committedInSession: true, lastAgeMs: enterMs)
             } else if delta < 0 || score < C.recoveringToIdleScore {
-                return MealHypothesisState(state: .idle, ageCycles: 0)
+                return MealHypothesisState(state: .idle, ageCycles: 0, lastAgeMs: enterMs)
             } else {
-                return MealHypothesisState(state: state, ageCycles: age + 1, committedInSession: true)
+                return MealHypothesisState(state: state, ageCycles: age + bumped, committedInSession: true, lastAgeMs: tickMs)
             }
         }
     }
