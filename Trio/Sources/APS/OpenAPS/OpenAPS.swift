@@ -796,7 +796,12 @@ final class OpenAPS {
                     fastCarbConfirm: preferences.boostV5FastCarbConfirm,
                     composedFloorActive: preferences.boostV5ComposedFloorActive,
                     aggressiveEarlyConfirm: preferences.boostV5AggressiveEarlyConfirm,
-                    velocityBudgetActive: preferences.boostV5VelocityBudgetActive
+                    velocityBudgetActive: preferences.boostV5VelocityBudgetActive,
+                    primerCapU: (preferences.boostV5PrimerCapU as NSDecimalNumber).doubleValue,
+                    // The recommended routing is the temp basal unless the user has forced a bolus.
+                    // The override is always honoured, and recorded in the reason when it applies.
+                    primerUseTempBasal: preferences.boostV5PrimerTbrFallback
+                        && !preferences.boostV5PrimerBolusMode
                 ),
                 clock: clock,
                 recentSmbUnits60m: recentSmb60,
@@ -844,9 +849,15 @@ final class OpenAPS {
                     // dose is capped at the committed cap and the remaining IOB headroom, the floor
                     // requires the person to be awake and outside the post-rescue window, and the
                     // cumulative 60-minute, boost-active and sleep gates below all still run.
+                    // 2026-07-20 primer, bolus route: the OBSERVING primer is already folded into
+                    // the final dose and netted in the engine, so it must be exempt from the
+                    // non-meal cap. It has to out-dose the base engine's OBSERVING dose, because
+                    // that is the reclaimed early insulin. Its own floors ran in the engine and the
+                    // cumulative, sleep and boost-active guards below still apply.
                     let inMealState = result.decision.mealHypothesis == .confirmed
                         || result.decision.mealHypothesis == .committed
                         || result.decision.velocityBudgetExempt
+                        || (result.decision.primerBolusU > 0 && !result.decision.primerUseTempBasal)
 
                     // Post-rescue meal-state cap (2026-07-04, faithful port of AAPS
                     // c306241a35 / OpenAPSBoostPlugin.applyV6OverrideCaps): inside the
@@ -950,6 +961,59 @@ final class OpenAPS {
                         }
                     } else {
                         det.reason += " V6 SMB held (\(smbInterval)m SMB interval not elapsed);"
+                    }
+
+                    // 2026-07-20 early-primer delivery. Skipped once the rolling cumulative cap is
+                    // reached, matching the Kotlin, which excludes the whole block in that case.
+                    if !cumulativeCapReached, result.decision.primerBolusU > 0 {
+                        let primerU = result.decision.primerBolusU
+                        if result.decision.primerUseTempBasal {
+                            // Retractable temp basal: deliver roughly the primer over a short window
+                            // as a raise above scheduled basal, additive only. It never fires while
+                            // the base engine is suspending or reducing, so a protective low or zero
+                            // temp always wins; it never lowers what the base engine planned, and
+                            // never shortens its duration. If the meal fades it simply expires.
+                            let durationMin: Decimal = 30
+                            let currentBasal = profile.currentBasal ?? 0
+                            let extraRate = Decimal(primerU) * (60 / durationMin)
+                            let primerRate = currentBasal + extraRate
+                            let baseRate = det.rate
+                            if let baseRate, baseRate < currentBasal {
+                                det.reason += " primer=tbr-skipped(base temp " +
+                                    "\(String(format: "%.3f", (baseRate as NSDecimalNumber).doubleValue)) < basal " +
+                                    "\(String(format: "%.3f", (currentBasal as NSDecimalNumber).doubleValue)));"
+                            } else if let baseRate, baseRate >= primerRate {
+                                // The base engine already delivers at or above the primer rate, so
+                                // the primer adds nothing. Its rate and duration are left alone:
+                                // extending a high base temp would over-deliver.
+                                det.reason += " primer=tbr-subsumed(base " +
+                                    "\(String(format: "%.3f", (baseRate as NSDecimalNumber).doubleValue)) >= primer " +
+                                    "\(String(format: "%.3f", (primerRate as NSDecimalNumber).doubleValue))U/h);"
+                            } else {
+                                det.rate = primerRate
+                                det.duration = max(det.duration ?? 0, durationMin)
+                                det.reason += " primer=tbr,\(String(format: "%.3f", primerU))U→" +
+                                    "\(String(format: "%.3f", (primerRate as NSDecimalNumber).doubleValue))U/h" +
+                                    "×\(det.duration ?? durationMin)m;"
+                            }
+                        } else {
+                            // Bolus route: already folded into the dose above and exempted from the
+                            // non-meal cap. When auto-config recommended the temp basal and the user
+                            // has overridden to a bolus, say so: the override is always honoured,
+                            // but it must be visible in the data, because it is the difference
+                            // between a primer the loop can unwind and one it cannot.
+                            let routeOverridden = preferences.boostV5PrimerTbrFallback
+                                && preferences.boostV5PrimerBolusMode
+                            det.reason += " primer=bolus,\(String(format: "%.3f", primerU))U"
+                                + (routeOverridden ? ";primerRoute=bolus-USER-OVERRIDE(recommended=tbr)" : "") + ";"
+                        }
+                    }
+                    // Sizing telemetry, emitted whenever the gate opened, including when the state
+                    // factors sized the primer to nothing and it rounded away. Without it a reader
+                    // cannot tell "the gate never opened" from "the gate opened and correctly sized
+                    // to zero", which is the point of the rework.
+                    if !result.decision.primerScaleDebug.isEmpty {
+                        det.reason += " primerScale[\(result.decision.primerScaleDebug)];"
                     }
                 } else if asleep {
                     det.reason += " V6 suppressed (SLEEPING) — base SMB stands;"

@@ -88,6 +88,15 @@ struct Preferences: JSON, Equatable {
     /// doses about zero. Gated by the same fail-closed 14-day time-below-range test as the composed
     /// floor, and by every Phase-3 hard gate and seam guard.
     var boostV5VelocityBudgetActive: Bool = false
+    /// Early-primer ceiling in units (AAPS `ApsBoostV5PrimerCapU`). 0 turns the primer off.
+    /// Auto-config sizes it from the person's own committed cap.
+    var boostV5PrimerCapU: Decimal = 0
+    /// Route the primer as a retractable temp basal rather than a bolus (AAPS
+    /// `ApsBoostV5PrimerTbrFallback`). Auto-config sets it for anyone not clearly well-controlled.
+    var boostV5PrimerTbrFallback: Bool = true
+    /// User override forcing the bolus route even when the fallback above is set (AAPS
+    /// `ApsBoostV5PrimerBolusMode`). Honoured always, and recorded in the reason when it overrides.
+    var boostV5PrimerBolusMode: Bool = false
     // Per-knob "user touched this cap" flags — the Swift equivalent of Android's getIfExists==null.
     // Set true only when the user moves the cap slider (FeatureSettingsView onEditingChanged), never
     // programmatically. Auto-config seeds a cap from history ONLY when its flag is false, so it can
@@ -217,6 +226,9 @@ extension Preferences {
         case boostV5ComposedFloorActive
         case boostV5AggressiveEarlyConfirm
         case boostV5VelocityBudgetActive
+        case boostV5PrimerCapU
+        case boostV5PrimerTbrFallback
+        case boostV5PrimerBolusMode
         case boostV5ConfirmedCapUUserSet
         case boostV5CommittedCapUUserSet
         case boostCumulativeSmbCap60MinUserSet
@@ -553,6 +565,18 @@ extension Preferences: Decodable {
 
         if let v = try? container.decode(Bool.self, forKey: .boostV5VelocityBudgetActive) {
             preferences.boostV5VelocityBudgetActive = v
+        }
+
+        if let v = try? container.decode(Decimal.self, forKey: .boostV5PrimerCapU) {
+            preferences.boostV5PrimerCapU = max(0, min(2.5, v))
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5PrimerTbrFallback) {
+            preferences.boostV5PrimerTbrFallback = v
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostV5PrimerBolusMode) {
+            preferences.boostV5PrimerBolusMode = v
         }
         if let v = try? container.decode(Bool.self, forKey: .boostV5AutoConfigDone) {
             preferences.boostV5AutoConfigDone = v

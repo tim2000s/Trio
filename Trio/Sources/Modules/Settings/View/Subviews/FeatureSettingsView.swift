@@ -119,6 +119,9 @@ struct FeatureSettingsView: BaseView {
                 Toggle("Phase-3 composed brake floor", isOn: $state.boostV5ComposedFloorActive)
                 Toggle("Confirm sooner", isOn: $state.boostV5AggressiveEarlyConfirm)
                 Toggle("Velocity-budget floor", isOn: $state.boostV5VelocityBudgetActive)
+                boostSlider("Early primer ceiling (U)", $state.boostV5PrimerCapU, in: 0 ... 2.5, step: 0.05)
+                Toggle("Primer via retractable temp basal", isOn: $state.boostV5PrimerTbrFallback)
+                Toggle("Force primer as bolus", isOn: $state.boostV5PrimerBolusMode)
             }
             .listRowBackground(Color.chart)
 

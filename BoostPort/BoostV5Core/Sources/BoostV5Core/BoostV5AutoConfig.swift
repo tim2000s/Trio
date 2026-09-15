@@ -90,6 +90,9 @@ public enum BoostV5AutoConfig {
         /// Insulin-adding opt-in switches, enabled only for a clearly well-controlled history.
         public let aggressiveEarlyConfirm: Bool
         public let velocityBudgetFloor: Bool
+        /// Early-primer ceiling in units, 0 meaning off, and the delivery routing.
+        public let primerCapU: Double
+        public let primerTbrFallback: Bool
         public let rationale: [String]
     }
 
@@ -153,6 +156,41 @@ public enum BoostV5AutoConfig {
                 : "Confirm sooner + velocity-budget floor OFF (enabled only for very low low-glucose exposure)"
         )
 
+        // Early primer. Everyone with enough data gets one, but the size scales with control and
+        // the delivery routes anyone not clearly well-controlled through the retractable temp
+        // basal, which unwinds, rather than a bolus, which does not.
+        //
+        // The fractions were re-levelled for the 2026-07-30 sizing rework. The cap used to be a
+        // base that an acceleration scale multiplied by up to two, and because that scale saturated
+        // the doubled peak was paid on five of six observed live fires, flat traces included. The
+        // scale is gone and the cap is now a true ceiling reached only at a confirm-strength rise
+        // with glucose in band and insulin headroom to spare. Keeping the old fractions would have
+        // halved the peak and left the sized dose rounding to nothing at most real onsets, so they
+        // are raised by half. The new ceiling lands at three quarters of the old effective peak: a
+        // deliberate quarter cut at full strength, on top of the much larger cut everywhere below
+        // it, measured at about 85% less primer insulin overall and concentrated on genuine rises.
+        let primerFrac: Double = hypoProne ? 0.375 : (wellControlled ? 0.75 : 0.6)
+        // The bound is one commit shot. The primer is an advance on the CONFIRMED shot, so it
+        // should never exceed the shot it advances. Since the fraction is at most 0.75 this is an
+        // invariant rather than a cutoff, and it scales in the person's own units because the
+        // committed cap is derived from their own dose distribution.
+        let primerCapU = round2(min(max(committedCapU * primerFrac, 0), committedCapU))
+        // Only a clearly well-controlled history routes to the bolus. That makes the bolus route
+        // inherently safe on time-below-range, which is why the primer cap is not raise-guarded:
+        // the routing is the safety differentiator rather than a cap. A user can force the bolus.
+        let primerTbrFallback = !wellControlled
+        reasons.append(
+            "Primer ceiling \(primerCapU)U "
+                + (
+                    primerTbrFallback
+                        ? "via retractable temp basal (recommended, can be overridden to bolus)"
+                        : "as bolus (well-controlled)"
+                )
+                + " — reclaims the earlier acceleration response. It is a ceiling paid only on a "
+                + "confirm-strength rise, from \(Int(Primer.deltaMin)) mg/dL per 5 min to fire and "
+                + "full at \(Int(Primer.deltaFull)), scaled down by glucose room and insulin headroom."
+        )
+
         return Suggestion(
             aggression: aggression, hypoCaution: hypoCaution,
             confirmedCapU: confirmedCapU, committedCapU: committedCapU,
@@ -161,6 +199,8 @@ public enum BoostV5AutoConfig {
             fastCarbConfirm: fastCarbConfirm,
             aggressiveEarlyConfirm: aggressiveEarlyConfirm,
             velocityBudgetFloor: velocityBudgetFloor,
+            primerCapU: primerCapU,
+            primerTbrFallback: primerTbrFallback,
             rationale: reasons
         )
     }

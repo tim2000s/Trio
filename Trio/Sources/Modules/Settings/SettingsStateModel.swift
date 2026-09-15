@@ -30,6 +30,9 @@ extension Settings {
         @Published var boostV5ComposedFloorActive: Bool = false
         @Published var boostV5AggressiveEarlyConfirm: Bool = false
         @Published var boostV5VelocityBudgetActive: Bool = false
+        @Published var boostV5PrimerCapU: Decimal = 0
+        @Published var boostV5PrimerTbrFallback: Bool = true
+        @Published var boostV5PrimerBolusMode: Bool = false
         @Published var boostUseTdd: Bool = false
         @Published var boostEnableCircadianIsf: Bool = false
         @Published var boostDynIsfNormalTarget: Decimal = 99
@@ -104,6 +107,12 @@ extension Settings {
                 boostV5AggressiveEarlyConfirm = $0 }
             subscribePreferencesSetting(\.boostV5VelocityBudgetActive, on: $boostV5VelocityBudgetActive) {
                 boostV5VelocityBudgetActive = $0 }
+            subscribePreferencesSetting(\.boostV5PrimerCapU, on: $boostV5PrimerCapU) {
+                boostV5PrimerCapU = $0 }
+            subscribePreferencesSetting(\.boostV5PrimerTbrFallback, on: $boostV5PrimerTbrFallback) {
+                boostV5PrimerTbrFallback = $0 }
+            subscribePreferencesSetting(\.boostV5PrimerBolusMode, on: $boostV5PrimerBolusMode) {
+                boostV5PrimerBolusMode = $0 }
             subscribePreferencesSetting(\.boostUseTdd, on: $boostUseTdd) { boostUseTdd = $0 }
             subscribePreferencesSetting(\.boostEnableCircadianIsf, on: $boostEnableCircadianIsf) { boostEnableCircadianIsf = $0 }
             subscribePreferencesSetting(\.boostDynIsfNormalTarget, on: $boostDynIsfNormalTarget) { boostDynIsfNormalTarget = $0 }

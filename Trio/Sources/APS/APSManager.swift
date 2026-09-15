@@ -1120,8 +1120,10 @@ final class BaseAPSManager: APSManager, Injectable {
         case .confirmedCapU: return dbl(p.boostV5ConfirmedCapU)
         case .committedCapU: return dbl(p.boostV5CommittedCapU)
         case .cumulativeSmbCap60Min: return dbl(p.boostCumulativeSmbCap60Min)
+        case .primerCapU: return dbl(p.boostV5PrimerCapU)
         case .aggressiveEarlyConfirm,
              .fastCarbConfirm,
+             .primerTbrFallback,
              .velocityBudgetFloor: return 0 // boolean knobs — handled separately by the caller
         }
     }
@@ -1144,6 +1146,8 @@ final class BaseAPSManager: APSManager, Injectable {
             return p.boostV5AggressiveEarlyConfirm != stock.boostV5AggressiveEarlyConfirm
         case .velocityBudgetFloor:
             return p.boostV5VelocityBudgetActive != stock.boostV5VelocityBudgetActive
+        case .primerTbrFallback:
+            return p.boostV5PrimerTbrFallback != stock.boostV5PrimerTbrFallback
         case .confirmedCapU where p.boostV5ConfirmedCapUUserSet,
              .committedCapU where p.boostV5CommittedCapUUserSet,
              .cumulativeSmbCap60Min where p.boostCumulativeSmbCap60MinUserSet:
@@ -1325,8 +1329,10 @@ final class BaseAPSManager: APSManager, Injectable {
                     case .confirmedCapU: prefs.boostV5ConfirmedCapU = Decimal(value)
                     case .committedCapU: prefs.boostV5CommittedCapU = Decimal(value)
                     case .cumulativeSmbCap60Min: prefs.boostCumulativeSmbCap60Min = Decimal(value)
+                    case .primerCapU: prefs.boostV5PrimerCapU = Decimal(value)
                     case .aggressiveEarlyConfirm,
                          .fastCarbConfirm,
+                         .primerTbrFallback,
                          .velocityBudgetFloor: break // boolean knobs handled below
                     }
                 },
@@ -1366,6 +1372,15 @@ final class BaseAPSManager: APSManager, Injectable {
                     }
                 }
                 markResolved(.velocityBudgetFloor)
+            }
+            if !resolved(.primerTbrFallback) {
+                if prefs.boostV5PrimerTbrFallback == stock.boostV5PrimerTbrFallback {
+                    prefs.boostV5PrimerTbrFallback = s.primerTbrFallback
+                    if s.primerTbrFallback != stock.boostV5PrimerTbrFallback {
+                        booleanApplied.append("primerTbrFallback=\(s.primerTbrFallback)")
+                    }
+                }
+                markResolved(.primerTbrFallback)
             }
             settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
 

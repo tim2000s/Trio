@@ -63,6 +63,11 @@ enum BoostV5Adapter {
         /// takes effect when mode == .active, under the same fail-closed 14-day TBR gate as the
         /// composed floor.
         var velocityBudgetActive: Bool = false
+        /// 2026-07-20 early-primer ceiling (boostV5PrimerCapU), in units. 0 turns the primer off.
+        var primerCapU: Double = 0
+        /// Delivery routing: true routes through a retractable temp basal. The host resolves the
+        /// recommended fallback against the user's bolus override before passing it.
+        var primerUseTempBasal: Bool = true
     }
 
     static func run(
@@ -258,6 +263,11 @@ enum BoostV5Adapter {
                 // requirement. A hypo-prone user cannot reach it even with the toggle on.
                 velocityBudgetActive: mode == .active && knobs.velocityBudgetActive
                     && BoostComposedFloorGate.allowed,
+                // 2026-07-20 early primer. Live only when V6 is the doser; in shadow the whole
+                // engine result is discarded, so no gate is needed beyond the mode.
+                primerCapU: mode == .active ? knobs.primerCapU : 0,
+                primerUseTempBasal: knobs.primerUseTempBasal,
+                nowMs: clock.timeIntervalSince1970 * 1000.0,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,
                 hypoCautionUserKnob: knobs.hypoCaution,

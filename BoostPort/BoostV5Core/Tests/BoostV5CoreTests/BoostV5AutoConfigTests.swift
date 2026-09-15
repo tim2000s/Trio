@@ -157,8 +157,10 @@ final class BoostV5AutoConfigTests: XCTestCase {
         case .confirmedCapU: return 2.5
         case .committedCapU: return 0.5
         case .cumulativeSmbCap60Min: return 10.0
+        case .primerCapU: return 0.0 // derived from the committed cap; no separate factory value
         case .aggressiveEarlyConfirm,
              .fastCarbConfirm,
+             .primerTbrFallback,
              .velocityBudgetFloor: return 0 // boolean knobs, handled by the host
         }
     }
@@ -410,6 +412,8 @@ final class BoostV5AutoConfigTests: XCTestCase {
             fastCarbConfirm: s.fastCarbConfirm,
             aggressiveEarlyConfirm: s.aggressiveEarlyConfirm,
             velocityBudgetFloor: s.velocityBudgetFloor,
+            primerCapU: s.primerCapU,
+            primerTbrFallback: s.primerTbrFallback,
             rationale: s.rationale
         )
         let resAgain = f.apply(rederived, tbr: safeTbr)

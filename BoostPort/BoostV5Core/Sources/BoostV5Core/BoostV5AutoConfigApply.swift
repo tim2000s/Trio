@@ -17,17 +17,24 @@ public enum BoostAutoConfigKnob: String, CaseIterable, Sendable {
     /// the hypo-prone one.
     case aggressiveEarlyConfirm
     case velocityBudgetFloor
+    /// 2026-07-20 early-primer ceiling, in units. Deliberately NOT in `doseCapKnobs`: the primer's
+    /// safety differentiator is its delivery routing, which sends anyone not clearly
+    /// well-controlled through a retractable temp basal, rather than a raise guard on the size.
+    case primerCapU
+    /// 2026-07-20 primer routing. Boolean, so the host applies it while the preference still sits
+    /// at its factory default.
+    case primerTbrFallback
 
     /// The double-valued knobs `applyAutoConfig` resolves (stable order). The boolean knobs are
     /// handled separately by the host, as in the AAPS plugin.
     public static let doubleKnobs: [BoostAutoConfigKnob] = [
-        .aggression, .hypoCaution, .confirmedCapU, .committedCapU, .cumulativeSmbCap60Min
+        .aggression, .hypoCaution, .confirmedCapU, .committedCapU, .cumulativeSmbCap60Min, .primerCapU
     ]
 
     /// The boolean knobs, which the host applies only while the preference still sits at its
     /// factory default, then marks resolved either way.
     public static let booleanKnobs: [BoostAutoConfigKnob] = [
-        .fastCarbConfirm, .aggressiveEarlyConfirm, .velocityBudgetFloor
+        .fastCarbConfirm, .aggressiveEarlyConfirm, .velocityBudgetFloor, .primerTbrFallback
     ]
 }
 
@@ -221,6 +228,16 @@ public enum BoostV5AutoConfigApply {
             confirmedCapU: operative[.confirmedCapU]!,
             committedCapU: operative[.committedCapU]!
         ))
+        // Primer ceiling, resolved after the caps so it can be sized from the FINAL operative
+        // committed cap rather than the derivation's own, for the same reason the cumulative cap is.
+        // The primer is an advance on the commit shot, so a kept user cap must bound it too.
+        if suggestion.committedCapU > 0 {
+            let frac = suggestion.primerCapU / suggestion.committedCapU
+            let sized = (operative[.committedCapU]! * frac * 100).rounded() / 100
+            resolve(.primerCapU, min(max(sized, 0), operative[.committedCapU]!))
+        } else {
+            resolve(.primerCapU, suggestion.primerCapU)
+        }
         return resolutions
     }
 

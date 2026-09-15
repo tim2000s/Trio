@@ -56,6 +56,14 @@ public struct V5Inputs {
     /// delivered dose on qualifying cycles and flags `velocityBudgetExempt`, which the override
     /// seam reads so the hold may out-dose the base engine. Per-user opt-in only.
     public var velocityBudgetActive: Bool
+    /// Per-user fizzle-safe ceiling for the early primer, in units. 0 turns the primer off.
+    public var primerCapU: Double
+    /// True routes the primer as a retractable temp basal rather than folding it into the bolus.
+    /// The host sets it from the fallback preference unless the user has overridden to bolus.
+    public var primerUseTempBasal: Bool
+    /// Wall-clock epoch-ms for this cycle, used by the primer-insulin accumulator's decay.
+    /// 0 means unknown, in which case no decay is applied.
+    public var nowMs: Double
     // Reset triggers
     public var profileSwitched: Bool
     public var pumpDisconnected: Bool
@@ -79,6 +87,7 @@ public struct V5Inputs {
         sensorQualityOk: Bool = true,
         postRescueWindow: Bool = false, v1WouldDoseU: Double? = nil, composedFloorActive: Bool = false,
         velocityBudgetActive: Bool = false,
+        primerCapU: Double = 0, primerUseTempBasal: Bool = false, nowMs: Double = 0,
         profileSwitched: Bool = false,
         pumpDisconnected: Bool = false, loopSuspended: Bool = false, timeJumpMinutes: Double = 0.0,
         aggressionUserKnob: Double = 1.0, hypoCautionUserKnob: Double = 1.0, sensitivityUserKnob: Double = 1.0,
@@ -116,6 +125,9 @@ public struct V5Inputs {
         self.composedFloorActive = composedFloorActive
         self.aggressiveEarlyConfirmEnabled = aggressiveEarlyConfirmEnabled
         self.velocityBudgetActive = velocityBudgetActive
+        self.primerCapU = primerCapU
+        self.primerUseTempBasal = primerUseTempBasal
+        self.nowMs = nowMs
         self.profileSwitched = profileSwitched
         self.pumpDisconnected = pumpDisconnected
         self.loopSuspended = loopSuspended
@@ -140,24 +152,48 @@ public struct V5PersistedState: Codable, Equatable, Sendable {
     /// it survives across cycles only via BoostV5Store's in-memory cache, so a process restart
     /// loses it, which fails safe (streak=false → legacy confirm timing for one cycle).
     public var lastCycleScore: Double? = nil
+    /// Units delivered as the early primer in this meal session, 0 meaning not yet primed. The
+    /// once-per-session guard; reset on IDLE.
+    public var primerAppliedU: Double = 0
+    /// Remaining commit-shot reduction owed. Set at the CONFIRMED transition to the accumulated
+    /// primer insulin beyond one base, then netted off the CONFIRMED shot and the COMMITTED holds.
+    public var primerNettingResidualU: Double = 0
+    /// Cross-session estimate of primer insulin still on board, in units, decayed by wall clock.
+    /// It accumulates every primer across sessions and is deliberately NOT reset on IDLE, so a
+    /// commit shot can credit the primer insulin from fizzled sessions that preceded it.
+    public var primerIobU: Double = 0
+    /// Epoch-ms the accumulator was last updated, for the decay. 0 means never.
+    public var primerIobUpdatedMs: Double = 0
 
     enum CodingKeys: String, CodingKey {
         // lastCycleScore intentionally omitted — in-memory only (see its doc comment).
         case mealHypothesis
         case mlMealLikelyNullStreak
         case lastRunMs
+        case primerAppliedU
+        case primerNettingResidualU
+        case primerIobU
+        case primerIobUpdatedMs
     }
 
     public init(
         mealHypothesis: MealHypothesisState = MealHypothesisState(),
         mlMealLikelyNullStreak: Int = 0,
         lastRunMs: Double? = nil,
-        lastCycleScore: Double? = nil
+        lastCycleScore: Double? = nil,
+        primerAppliedU: Double = 0,
+        primerNettingResidualU: Double = 0,
+        primerIobU: Double = 0,
+        primerIobUpdatedMs: Double = 0
     ) {
         self.mealHypothesis = mealHypothesis
         self.mlMealLikelyNullStreak = mlMealLikelyNullStreak
         self.lastRunMs = lastRunMs
         self.lastCycleScore = lastCycleScore
+        self.primerAppliedU = primerAppliedU
+        self.primerNettingResidualU = primerNettingResidualU
+        self.primerIobU = primerIobU
+        self.primerIobUpdatedMs = primerIobUpdatedMs
     }
 }
 
@@ -190,6 +226,16 @@ public struct V5Decision {
     /// the base engine doses about zero. The exempt dose is bounded by the committed cap and the
     /// remaining IOB headroom.
     public let velocityBudgetExempt: Bool
+    /// Units to deliver as the early primer this cycle, expressed as a bolus equivalent. In bolus
+    /// mode it is already folded into `finalDose`; in temp-basal mode it is not, and the seam
+    /// converts it to a retractable temp basal. 0 means no primer this cycle.
+    public let primerBolusU: Double
+    /// Delivery routing, passed through for the seam. True means temp basal.
+    public let primerUseTempBasal: Bool
+    /// Sizing telemetry, of the form "d=<delta>,fR=,fB=,fI=,tgt=". Non-empty whenever the primer
+    /// gate opened, including when the state factors sized it to nothing, so a shadow can tell
+    /// "the gate never opened" from "the gate opened and correctly sized to zero".
+    public let primerScaleDebug: String
     public let newPersistedState: V5PersistedState
 }
 
@@ -262,6 +308,62 @@ public enum BoostV5Engine {
             scoreReadyStreak: scoreReadyStreak, // 2026-07-03 sustained-score early confirm (hoisted above)
             aggressiveEarlyConfirm: inputs.aggressiveEarlyConfirmEnabled // 2026-07-17 opt-in, one cycle earlier
         )
+
+        // Early primer (AAPS 2026-07-20). Computed here, where the state is known, and applied
+        // after the final dose is settled below. Once per OBSERVING session, on an accelerating
+        // rise, with every floor clear and IOB headroom to spare. The once-per-session guard
+        // resets on IDLE; the primer-insulin accumulator deliberately does not, so a commit shot
+        // can credit the primer insulin from fizzled sessions that preceded it.
+        let primerState = newHypothesisState.state
+        var primerAppliedU = primerState == .idle ? 0.0 : persisted.primerAppliedU
+        var primerIobU = persisted.primerIobU
+        if inputs.nowMs > 0, persisted.primerIobUpdatedMs > 0, inputs.nowMs > persisted.primerIobUpdatedMs {
+            let dtMin = (inputs.nowMs - persisted.primerIobUpdatedMs) / 60000.0
+            primerIobU *= exp(-dtMin / Primer.iobTauMin)
+        }
+        var primerBolusU = 0.0
+        var primerScaleDebug = ""
+        if inputs.primerCapU > 0, primerState == .observing, primerAppliedU <= 0,
+           inputs.delta >= Primer.deltaMin, inputs.deltaAccl > Primer.accelThreshold,
+           inputs.recentLowBg >= Primer.minRecentLowMgdl, !inputs.asleep,
+           !inputs.exerciseActive, !inputs.postRescueWindow
+        {
+            // The cap is a true ceiling and three factors in [0, 1] scale it down. The rise factor
+            // discriminates, carrying the magnitude of the actual rise. The glucose and insulin
+            // factors suppress: neither can tell a real onset from jitter, because at onset both
+            // look flat and benign, and they exist only to bound the cost of being wrong.
+            // `deltaAccl` deliberately does not scale, since it peaks on flat traces and any
+            // monotonic function of it would re-import the inversion the rework removed.
+            let fRise = min(max((inputs.delta - Primer.deltaRampLo) / (Primer.deltaFull - Primer.deltaRampLo), 0), 1)
+            let fBg = min(max((inputs.bg - Primer.bgLo) / Primer.bgLoSpan, 0), 1)
+                * min(max((Primer.bgCeil - inputs.bg) / Primer.bgFade, 0), 1)
+            let fIob = inputs.maxIob > 0 ? min(max(1.0 - inputs.iob / inputs.maxIob, 0), 1) : 0
+            let target = inputs.primerCapU * fRise * fBg * fIob
+            var amt = min(target, max(0.0, inputs.maxIob - inputs.iob))
+            if inputs.roundSmbTo > 0 { amt = floor(amt / inputs.roundSmbTo + 1E-9) * inputs.roundSmbTo }
+            // Re-clamp after rounding. floor(x/step)*step can land a hair above the target in
+            // binary floating point, which would break the ceiling invariant; rounding must only
+            // ever go down.
+            amt = min(amt, target)
+            primerScaleDebug = "d=\(rnd(inputs.delta, 1)),fR=\(rnd(fRise, 2)),fB=\(rnd(fBg, 2)),"
+                + "fI=\(rnd(fIob, 2)),tgt=\(rnd(target, 3))"
+            if amt > 0 {
+                primerBolusU = amt
+                primerAppliedU = amt
+                primerIobU += amt
+            }
+        }
+        let primerIobUpdatedMs = inputs.nowMs > 0 ? inputs.nowMs : persisted.primerIobUpdatedMs
+        // Netting residual: reset on IDLE, and set at the CONFIRMED transition to the accumulated
+        // primer insulin beyond one base, so the first primer's bonus stays additive while later
+        // fizzles are credited against the commit shot. The credited excess is then consumed from
+        // the accumulator so a second meal cannot re-credit it. Spent down against CONFIRMED and
+        // then the COMMITTED holds below.
+        var primerNettingResidualU = primerState == .idle ? 0.0 : persisted.primerNettingResidualU
+        if primerState == .confirmed {
+            primerNettingResidualU = max(0.0, primerIobU - inputs.primerCapU)
+            primerIobU = min(primerIobU, inputs.primerCapU)
+        }
 
         let actionMult = MealActionMultiplier.value(for: newHypothesisState.state, aggressionUserKnob: inputs.aggressionUserKnob)
         let rawInsulinToDeliver = budget.budget * actionMult
@@ -368,6 +470,19 @@ public enum BoostV5Engine {
             velocityBudgetWouldAdd = vbTarget.map { _ in finalDose - doseBeforeVelocityBudget }
         }
 
+        // Bolus routing folds the primer into the final dose, and the seam exempts such a cycle
+        // from the non-meal cap. Temp-basal routing leaves the dose alone and the seam delivers the
+        // primer as a retractable raise above scheduled basal.
+        if primerBolusU > 0, !inputs.primerUseTempBasal {
+            finalDose = min(finalDose + primerBolusU, max(0.0, inputs.maxIob - inputs.iob))
+        }
+        // Net the accumulated primer excess off the commit shot and then the holds: move, not add.
+        if primerState == .confirmed || primerState == .committed, primerNettingResidualU > 0 {
+            let net = min(primerNettingResidualU, finalDose)
+            finalDose = max(0.0, finalDose - net)
+            primerNettingResidualU -= net
+        }
+
         return V5Decision(
             finalDose: finalDose, score: scoreResult.score, scoreComponents: scoreResult.components,
             mlWeightsRenormalized: scoreResult.mlWeightsRenormalized, mealHypothesis: newHypothesisState.state,
@@ -376,10 +491,17 @@ public enum BoostV5Engine {
             floorWouldAdd: floorWouldAdd,
             velocityBudgetWouldAdd: velocityBudgetWouldAdd,
             velocityBudgetExempt: velocityBudgetExempt,
+            primerBolusU: primerBolusU,
+            primerUseTempBasal: inputs.primerUseTempBasal,
+            primerScaleDebug: primerScaleDebug,
             newPersistedState: V5PersistedState(
                 mealHypothesis: newHypothesisState,
                 mlMealLikelyNullStreak: nextNullStreak,
-                lastCycleScore: scoreResult.score // 2026-07-03: next cycle's scoreReadyStreak input
+                lastCycleScore: scoreResult.score, // 2026-07-03: next cycle's scoreReadyStreak input
+                primerAppliedU: primerAppliedU,
+                primerNettingResidualU: primerNettingResidualU,
+                primerIobU: primerIobU,
+                primerIobUpdatedMs: primerIobUpdatedMs
             )
         )
     }
@@ -405,6 +527,65 @@ public enum BoostV5Engine {
 /// 9110ef2520 + 8b492a08e7): the floor may only engage while trailing-14d TBR<63 < 2.0% AND
 /// TBR<70 < 3.5% (`allowedByTbr`, fail-closed). The host computes those from a throttled 14d BG
 /// scan and ANDs the result into `V5Inputs.composedFloorActive`.
+/// V1-acceleration early primer (AAPS 2026-07-20, reworked 2026-07-30).
+///
+/// The base Boost engine responded to acceleration about 15 minutes before V6 reached CONFIRMED,
+/// at 98% recall. The primer restores that lead as a small advance on the commit shot, delivered
+/// once per OBSERVING session. It is additive up to the fizzle-safe ceiling and the excess is
+/// netted off the commit shot, so a confirmed meal moves insulin earlier rather than adding it.
+///
+/// The 2026-07-30 rework replaced the original trigger and sizing. `deltaAccl` is a percentage
+/// whose denominator floors at 2.0, so on a flat trace the old gate reduced to a rise of 0.2
+/// mg/dL, a fifth of one sensor quantisation step. Measured over 90 days and 25,766 points it was
+/// the worst of ten candidate detectors, and its magnitude scaling ran backwards: a flat trace
+/// scored 33.5 while a genuine 11 mg/dL per 5 min rise scored 12.5, so noise was paid about twice
+/// and real meals about 1.1 times. It also saturated at its ceiling on five of six observed live
+/// fires, making it a constant dressed as a response curve. One incident delivered 1.35 U on a
+/// flat 120 and reached a nadir of 68.
+///
+/// Now the absolute rise carries the magnitude, `deltaAccl` remains only as a cheap shape
+/// confirmer, and the cap is a true ceiling scaled down by three factors in [0, 1].
+/// Fixed-decimal rounding for the primer telemetry string, kept local so the core stays free of
+/// formatting dependencies.
+private func rnd(_ x: Double, _ dp: Int) -> Double {
+    var f = 1.0
+    for _ in 0 ..< dp { f *= 10 }
+    return (x * f).rounded() / f
+}
+
+enum Primer {
+    /// Acceleration trigger, the base engine's release threshold.
+    static let accelThreshold = 10.0
+    /// Suppressed unless the 60-minute low is at or above this, guarding a rescue-carb rebound.
+    static let minRecentLowMgdl = 80.0
+    /// Absolute-rise floor, mg/dL per 5 min. A rise of 3 strictly dominates the old ratio gate:
+    /// the same firing frequency, 25.75 against 26.70 per 100 cycles, at 52.7% against 43.8%
+    /// probability of a real rise, while keeping 25 minutes of median lead over the confirm point.
+    /// A floor of 5, the base engine's own, collapses that lead to 5 minutes and would make the
+    /// primer redundant with CONFIRMED.
+    static let deltaMin = 3.0
+    /// Rise at which the scale reaches 1.0, so the full ceiling is only paid on a confirm-strength
+    /// rise. It is the rise at which V6 reached CONFIRMED in the reference meal.
+    static let deltaFull = 8.0
+    /// Ramp origin, kept below `deltaMin` so the gate decides whether to fire and the ramp only
+    /// decides how much.
+    static let deltaRampLo = 1.5
+    /// Lower glucose shoulder: suppressed below this, full scale by lo + span. It guards the
+    /// near-target case, after an observed fire at 92 mg/dL on jitter. It does not discriminate,
+    /// because at onset a real meal and a flat trace look alike in glucose; it bounds the cost of
+    /// being wrong.
+    static let bgLo = 90.0
+    static let bgLoSpan = 20.0
+    /// Upper glucose shoulder: fades to zero from ceiling minus fade, so the primer can never add
+    /// into a recovering high-insulin tail, which was the repeated source of lows.
+    static let bgCeil = 220.0
+    static let bgFade = 40.0
+    /// Decay time constant in minutes for the cross-session primer-insulin accumulator, which
+    /// decays as exp(-dt / tau). About 90 minutes approximates rapid insulin clearance well enough
+    /// for the confirm-time netting, which only ever removes insulin and is therefore safe-signed.
+    static let iobTauMin = 90.0
+}
+
 /// Velocity-budget floor (AAPS 2026-07-17), for the budget-near-zero high tail.
 ///
 /// It addresses cycles where the base engine's insulin requirement is at or below zero, meaning the
