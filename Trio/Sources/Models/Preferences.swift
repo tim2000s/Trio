@@ -56,6 +56,9 @@ struct Preferences: JSON, Equatable {
     var boostMode: BoostMode = .off
     // Boost DynISF (V1) — used to compute a Boost-flavoured ISF in active mode. Defaults match AAPS.
     var boostUseTdd: Bool = false
+    // With TDD-based ISF off, let oref autosens adapt ISF, basal, target and carbohydrate absorption
+    // (AAPS ApsBoostAutosensWhenNoTdd, default on from 1c6358ac6c). No effect with TDD on.
+    var boostAutosensWhenNoTdd: Bool = true
     var boostDynIsfNormalTarget: Decimal = 99
     var boostDynIsfBgCap: Decimal = 210
     var boostDynIsfVelocity: Decimal = 100 // percent
@@ -222,6 +225,7 @@ extension Preferences {
         case updateInterval
         case boostMode
         case boostUseTdd
+        case boostAutosensWhenNoTdd
         case boostDynIsfNormalTarget
         case boostDynIsfBgCap
         case boostDynIsfVelocity
@@ -504,6 +508,10 @@ extension Preferences: Decodable {
 
         if let boostUseTdd = try? container.decode(Bool.self, forKey: .boostUseTdd) {
             preferences.boostUseTdd = boostUseTdd
+        }
+
+        if let v = try? container.decode(Bool.self, forKey: .boostAutosensWhenNoTdd) {
+            preferences.boostAutosensWhenNoTdd = v
         }
 
         if let v = try? container.decode(Decimal.self, forKey: .boostDynIsfNormalTarget) {
