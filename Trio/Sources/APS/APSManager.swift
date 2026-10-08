@@ -494,6 +494,11 @@ final class BaseAPSManager: APSManager, Injectable {
     func determineBasal() async throws {
         debug(.apsManager, "Start determine basal")
 
+        // Keep BG impact on ISF consistent with TDD-based ISF before anything reads it (AAPS
+        // 3d9d471dbb, f393d02e55). The engine already enforces it at read time; this writes it back
+        // so the settings screen shows what the engine uses.
+        reconcileBoostSensitivitySettings()
+
         // One-shot: on first switch to Boost V5 active, seed the V5 knobs from the user's own prior
         // (oref) dosing history. Guarded + self-contained; never throws into the dose path.
         await maybeAutoConfigureBoostV5()
@@ -1273,6 +1278,53 @@ final class BaseAPSManager: APSManager, Injectable {
         } catch {
             debug(.apsManager, "BoostV5 re-derivation failed (non-fatal): \(error)")
         }
+    }
+
+    /// Writes the result of `DynIsf.reconcileSensitivitySettings` back to preferences (AAPS
+    /// `applySensitivitySettingsReconcile`, 3d9d471dbb and f393d02e55). With TDD-based ISF off, BG
+    /// impact on ISF is set to 0; when TDD-based ISF is switched on, it is set back to the factory
+    /// value once, detected from the state recorded at the previous run. No record only records,
+    /// so an upgrade leaves a TDD user's BG impact as it is. The TDD state is bookkeeping rather than
+    /// a setting, so it lives in UserDefaults, as the other Boost stores do.
+    private func reconcileBoostSensitivitySettings() {
+        var prefs = settingsManager.preferences
+        guard prefs.boostMode != .off else { return }
+
+        let lastUseTddKey = "boost.lastUseTdd"
+        let lastUseTdd = UserDefaults.standard.object(forKey: lastUseTddKey) as? Bool
+        let useTdd = prefs.boostUseTdd
+        let velocityOnPct = Double(truncating: Preferences().boostDynIsfVelocity as NSNumber)
+        let r = DynIsf.reconcileSensitivitySettings(
+            useTdd: useTdd,
+            velocityPct: Double(truncating: prefs.boostDynIsfVelocity as NSNumber),
+            tddJustEnabled: DynIsf.isTddJustEnabled(lastUseTdd: lastUseTdd, useTdd: useTdd),
+            velocityOnPct: velocityOnPct
+        )
+        if lastUseTdd != useTdd { UserDefaults.standard.set(useTdd, forKey: lastUseTddKey) }
+        guard r.changed else { return }
+
+        prefs.boostDynIsfVelocity = Decimal(r.velocityPct)
+        settingsManager.preferences = prefs // persists + notifies via SettingsManager.didSet
+
+        let what = "BG impact on ISF set to \(Int(r.velocityPct))%"
+        let why = r.zeroedVelocity ? "TDD-based ISF is off" : "TDD-based ISF was switched on"
+        debug(.apsManager, "Boost sensitivity settings: \(what) (\(why))")
+        let content = Alert.Content(
+            title: String(localized: "Boost sensitivity settings"),
+            body: "Boost: \(what), because \(why).",
+            acknowledgeActionButtonLabel: String(localized: "OK")
+        )
+        trioAlertManager.issueAlert(Alert(
+            identifier: Alert.Identifier(
+                managerIdentifier: "trio.boost",
+                alertIdentifier: "boost.sensitivitySettings"
+            ),
+            foregroundContent: content,
+            backgroundContent: content,
+            trigger: .immediate,
+            interruptionLevel: .active,
+            sound: nil
+        ))
     }
 
     private func maybeAutoConfigureBoostV5() async {

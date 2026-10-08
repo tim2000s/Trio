@@ -132,14 +132,19 @@ struct FeatureSettingsView: BaseView {
             Section(
                 header: Text("Boost Dynamic ISF"),
                 footer: Text(
-                    "Applies only in Active mode. Use TDD derives ISF from total daily dose; Circadian ISF applies a time-of-day sensitivity curve."
+                    "Applies only in Active mode. Use TDD derives ISF from total daily dose, and only then does BG change ISF: with Use TDD off the profile ISF is used as it is and Velocity is set to 0, and switching Use TDD on sets it back to 100. With Use TDD off, Autosens without TDD lets Autosens adjust ISF, basal, target and carb absorption. Circadian ISF applies a time-of-day sensitivity curve."
                 )
             ) {
                 Toggle("Use TDD", isOn: $state.boostUseTdd)
+                if !state.boostUseTdd {
+                    Toggle("Autosens without TDD", isOn: $state.boostAutosensWhenNoTdd)
+                }
                 Toggle("Circadian ISF", isOn: $state.boostEnableCircadianIsf)
                 boostGlucoseSlider("Normal target", $state.boostDynIsfNormalTarget, inMgdl: 70 ... 120)
                 boostGlucoseSlider("BG cap", $state.boostDynIsfBgCap, inMgdl: 100 ... 300)
-                boostSlider("Velocity %", $state.boostDynIsfVelocity, in: 0 ... 100, step: 5)
+                if state.boostUseTdd {
+                    boostSlider("Velocity %", $state.boostDynIsfVelocity, in: 0 ... 100, step: 5)
+                }
                 boostSlider("Adjustment factor %", $state.boostDynIsfAdjustmentFactor, in: 1 ... 300, step: 1)
             }
             .listRowBackground(Color.chart)
