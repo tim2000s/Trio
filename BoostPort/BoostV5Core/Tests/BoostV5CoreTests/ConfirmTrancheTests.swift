@@ -116,4 +116,75 @@ final class ConfirmTrancheTests: XCTestCase {
         XCTAssertEqual(c.heldU, 1.0, accuracy: 1E-12, "probing must not resolve the hold")
         XCTAssertNil(ConfirmTranche().probeProbability(bg: 185), "nothing pending")
     }
+
+    // MARK: bounds at the seam (AAPS a33752c9aa, audit item 1)
+
+    private func open(ceiling: Double = 10) -> ConfirmTranche.ReleaseBounds {
+        ConfirmTranche.ReleaseBounds(inMealState: true, hardGateFired: false, postRescueWindow: false, ceilingU: ceiling)
+    }
+
+    /// A confirm at 110 followed by a rise the rule releases on.
+    private func armed() -> ConfirmTranche {
+        let c = ConfirmTranche(releaseThreshold: 0.48, holdMinutes: 10)
+        _ = c.onConfirm(nowMs: t0, bg: 110, sizedDose: 2.0)
+        _ = c.onCycleBounded(nowMs: mins(5), bg: 130, bounds: open())
+        return c
+    }
+
+    func testBoundedAReleaseWithinEveryBoundIsDeliveredWhole() {
+        let r = armed().onCycleBounded(nowMs: mins(10), bg: 160, bounds: open())
+        XCTAssertEqual(r.units, 1.0, accuracy: 1E-9)
+        XCTAssertTrue(r.note.isEmpty)
+    }
+
+    func testBoundedLeavingTheMealStatesDropsTheHoldAndReleasesNothing() {
+        let c = armed()
+        var b = open()
+        b.inMealState = false
+        let r = c.onCycleBounded(nowMs: mins(10), bg: 160, bounds: b)
+        XCTAssertEqual(r.units, 0)
+        XCTAssertTrue(r.note.hasPrefix("dropped:state"))
+        XCTAssertEqual(c.heldU, 0)
+        XCTAssertEqual(c.onCycleBounded(nowMs: mins(15), bg: 180, bounds: open()).units, 0)
+    }
+
+    func testBoundedAPhase3HardGateDropsTheHold() {
+        let c = armed()
+        var b = open()
+        b.hardGateFired = true
+        XCTAssertEqual(c.onCycleBounded(nowMs: mins(10), bg: 160, bounds: b).units, 0)
+        XCTAssertEqual(c.heldU, 0)
+    }
+
+    func testBoundedThePostRescueWindowDropsTheHold() {
+        let c = armed()
+        var b = open()
+        b.postRescueWindow = true
+        XCTAssertEqual(c.onCycleBounded(nowMs: mins(10), bg: 160, bounds: b).units, 0)
+        XCTAssertEqual(c.heldU, 0)
+    }
+
+    func testBoundedTheReleaseIsClampedToWhatIsLeftOfMaxIobAndTheConfirmCap() {
+        let r = armed().onCycleBounded(nowMs: mins(10), bg: 160, bounds: open(ceiling: 0.4))
+        XCTAssertEqual(r.units, 0.4, accuracy: 1E-9)
+        XCTAssertEqual(r.note, "clamped:1.0->0.4")
+    }
+
+    func testCeilingIsTheTighterOfMaxIobHeadroomAndTheConfirmCapNeverNegative() {
+        // Headroom 3.0 - 1.8 - 0.5 = 0.7 against cap 2.0 - 0.5 = 1.5.
+        XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 3.0, iobU: 1.8, confirmedCapU: 2.0), 0.7, accuracy: 1E-9)
+        // Headroom 6.0 - 0.0 - 0.5 = 5.5 against cap 1.0 - 0.5 = 0.5.
+        XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 6.0, iobU: 0.0, confirmedCapU: 1.0), 0.5, accuracy: 1E-9)
+        // IOB already above maxIOB.
+        XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 2.0, iobU: 2.2, confirmedCapU: 2.0), 0)
+    }
+
+    func testOverAnEpisodeTheBoundedPathNeverDeliversMoreThanTheConfirmShot() {
+        let c = ConfirmTranche(releaseThreshold: 0.0, holdMinutes: 10)
+        var total = c.onConfirm(nowMs: t0, bg: 110, sizedDose: 2.0)
+        for t in 1 ... 8 {
+            total += c.onCycleBounded(nowMs: mins(Double(t * 5)), bg: 110 + 20 * Double(t), bounds: open()).units
+        }
+        XCTAssertLessThanOrEqual(total, 2.0 + 1E-9)
+    }
 }

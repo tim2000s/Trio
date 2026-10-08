@@ -26,9 +26,12 @@ import Foundation
 /// it withholds more, which is a tightening, so the existing raise-guard direction already points
 /// the right way.
 ///
-/// This can only deliver less than the engine would without it, never more. A withheld remainder
-/// that is never released is insulin not given, and the committed cycles that follow are unaffected.
-/// Its failure mode is delayed insulin on a real meal rather than extra insulin.
+/// This can only deliver less than the engine would without it, never more. Over an episode the
+/// immediate part plus any release is at most the confirm shot the engine sized, and a withheld
+/// remainder that is never released is insulin not given; the committed cycles that follow are
+/// unaffected. Its failure mode is delayed insulin on a real meal rather than extra insulin. On the
+/// cycle itself the release is held to the bounds the rest of the V6 dose meets, through
+/// `onCycleBounded` (AAPS a33752c9aa).
 public final class ConfirmTranche {
     /// Fitted over eleven participants, held out by participant.
     public enum Coefficients {
@@ -137,6 +140,65 @@ public final class ConfirmTranche {
                 + Coefficients.bgNow * bg
         )
     }
+
+    /// The bounds that apply to a release on this cycle, supplied from outside the controller (AAPS
+    /// a33752c9aa, audit item 1). The release rule reads glucose shape only, which is why these sit
+    /// outside it.
+    public struct ReleaseBounds: Equatable, Sendable {
+        /// V6's state is COMMITTED this cycle. A CONFIRMED cycle replaces the hold via `onConfirm`.
+        public var inMealState: Bool
+        /// A V6 phase-3 hard gate zeroed the dose this cycle.
+        public var hardGateFired: Bool
+        /// Inside the post-rescue window (45-minute low below the shared threshold).
+        public var postRescueWindow: Bool
+        /// The most the release may add this cycle; see `releaseCeiling`.
+        public var ceilingU: Double
+
+        public init(inMealState: Bool, hardGateFired: Bool, postRescueWindow: Bool, ceilingU: Double) {
+            self.inMealState = inMealState
+            self.hardGateFired = hardGateFired
+            self.postRescueWindow = postRescueWindow
+            self.ceilingU = ceilingU
+        }
+    }
+
+    /// `onCycle` under `bounds` (AAPS a33752c9aa, audit item 1). Returns the units to add and a short
+    /// note for the reason line, empty when nothing was bounded.
+    ///
+    /// The hold is dropped, not deferred, when the state has left COMMITTED, a hard gate fired or the
+    /// post-rescue window is open. Each is the engine deciding against more insulin, and a hold
+    /// carried past it would be released on evidence that predates it. In the AAPS field data a
+    /// release of 1.675 U landed in RECOVERING with V6's own dose at 0 and eventualBG 65. A release
+    /// the rule grants is clamped to the ceiling.
+    public func onCycleBounded(nowMs: Double, bg: Double?, bounds: ReleaseBounds) -> (units: Double, note: String) {
+        guard pending != nil else { return (0, "") }
+        let dropReason: String? = !bounds.inMealState ? "state"
+            : bounds.hardGateFired ? "hard-gate"
+            : bounds.postRescueWindow ? "post-rescue"
+            : nil
+        if let dropReason {
+            let held = heldU
+            reset()
+            return (0, "dropped:\(dropReason),\(Self.roundMilli(held))")
+        }
+        let granted = onCycle(nowMs: nowMs, bg: bg)
+        if granted <= 0 { return (0, "") }
+        let ceiling = max(0, bounds.ceilingU)
+        if granted > ceiling {
+            return (ceiling, "clamped:\(Self.roundMilli(granted))->\(Self.roundMilli(ceiling))")
+        }
+        return (granted, "")
+    }
+
+    /// The most a release may add on this cycle (AAPS a33752c9aa, audit item 1): what is left of the
+    /// maxIOB headroom and of the CONFIRMED per-cycle cap after the cycle's own dose. Both bounds are
+    /// what the confirm shot itself was held to, so the held remainder can never take a cycle above a
+    /// dose the engine would have been allowed to give in one go. Never negative.
+    public static func releaseCeiling(cycleDoseU: Double, maxIobU: Double, iobU: Double, confirmedCapU: Double) -> Double {
+        max(0, min(maxIobU - iobU - cycleDoseU, confirmedCapU - cycleDoseU))
+    }
+
+    private static func roundMilli(_ x: Double) -> Double { (x * 1000).rounded() / 1000 }
 
     /// Drops any hold. Used when the engine leaves a meal state entirely.
     public func reset() {
