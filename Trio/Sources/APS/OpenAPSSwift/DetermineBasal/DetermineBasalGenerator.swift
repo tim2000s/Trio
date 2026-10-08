@@ -38,7 +38,12 @@ enum DeterminationGenerator {
             glucoseStatus: glucoseStatus,
             microBolusAllowed: microBolusAllowed,
             trioCustomOrefVariables: trioCustomOrefVariables,
-            currentTime: currentTime
+            currentTime: currentTime,
+            // Boost pre-meal target: the post-rescue window needs the 45-min glucose low, which only
+            // this entry point holds. Nil outside Boost active mode, and for direct test callers.
+            boostRecentLowBg45Min: preferences.boostMode == .active
+                ? BoostV5Adapter.recentLowBg45Min(glucose, now: currentTime)
+                : nil
         )
     }
 
@@ -56,7 +61,8 @@ enum DeterminationGenerator {
         glucoseStatus: GlucoseStatus,
         microBolusAllowed: Bool,
         trioCustomOrefVariables: TrioCustomOrefVariables,
-        currentTime: Date
+        currentTime: Date,
+        boostRecentLowBg45Min: Double? = nil
     ) throws -> Determination? {
         var autosensData = autosensData
 
@@ -223,6 +229,7 @@ enum DeterminationGenerator {
 
         // Boost V6: in active mode, fire an anticipatory low target inside the learned pre-meal
         // window (lower-only), so insulinReq rises before carbs land. Suppressed during exercise.
+        var boostPreMealNote: String?
         if preferences.boostMode == .active,
            preferences.boostV6PreMealEnabled,
            !BoostActivityStore.shared.flags(now: currentTime).exerciseActive
@@ -231,17 +238,35 @@ enum DeterminationGenerator {
             let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
                 + Calendar.current.component(.minute, from: currentTime)
             let leadMax = Int((preferences.boostV6PreMealLeadMin as NSDecimalNumber).doubleValue)
+            let nightWindow = BoostV5Adapter.nightWindowMinutes(preferences)
+            // 2026-10-08 (AAPS a33752c9aa #8): learned sessions inside the night window are dropped,
+            // and the target applies only outside the window, with the detector neither SLEEPING nor
+            // PRE_SLEEP, with no temp target and outside the post-rescue window.
+            let history = BoostMealTimeStore.shared.historyWithoutNightEvents(
+                nightStartMin: nightWindow.start, nightEndMin: nightWindow.end, localOffsetMs: offsetMs
+            )
             if MealTimeLearner.preMealWindow(
-                BoostMealTimeStore.shared.history,
+                history,
                 nowMin: nowMin,
                 localOffsetMs: offsetMs,
                 leadMaxMin: leadMax
             ) != nil {
-                let preTarget = preferences.boostV6PreMealTargetMgdl
-                if preTarget < adjustedGlucoseTargets.targetGlucose {
-                    adjustedGlucoseTargets.targetGlucose = preTarget
-                    adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
-                    adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
+                if let why = MealTimeLearner.preMealTargetBlock(
+                    inNightWindow: BoostGate.inNightWindow(
+                        nowMinuteOfDay: nowMin, startMinute: nightWindow.start, endMinute: nightWindow.end
+                    ),
+                    sleepState: BoostActivityStore.shared.sleep(now: currentTime).state,
+                    tempTargetActive: profile.temptargetSet ?? false,
+                    postRescueWindow: (boostRecentLowBg45Min ?? .infinity) < SafetyGateConstants.postRescueLowThresholdMgdl
+                ) {
+                    boostPreMealNote = "V6 pre-meal SUPPRESSED (\(why)); "
+                } else {
+                    let preTarget = preferences.boostV6PreMealTargetMgdl
+                    if preTarget < adjustedGlucoseTargets.targetGlucose {
+                        adjustedGlucoseTargets.targetGlucose = preTarget
+                        adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
+                        adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
+                    }
                 }
             }
         }
@@ -435,6 +460,9 @@ enum DeterminationGenerator {
         // Add carbs message after smbReason to match JS order
         if let carbsReq = dosingInputs.carbsRequired {
             reason += "\(carbsReq.carbs) add'l carbs req w/in \(carbsReq.minutes)m; "
+        }
+        if let boostPreMealNote {
+            reason += boostPreMealNote
         }
 
         var determination = Determination(

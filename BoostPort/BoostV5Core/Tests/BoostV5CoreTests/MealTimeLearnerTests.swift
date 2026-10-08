@@ -167,4 +167,41 @@ final class MealTimeLearnerTests: XCTestCase {
         let json = String(data: data, encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains("\"events\""), "JSON should contain the events key: \(json)")
     }
+
+    // MARK: - Night filter (AAPS a33752c9aa #8)
+
+    func testNightWindowWrappingMidnightBothSidesInsideEndNot() {
+        // 22:00 to 07:00
+        XCTAssertTrue(MealTimeLearner.inNightMinutes(23 * 60 + 30, startMin: 1320, endMin: 420))
+        XCTAssertTrue(MealTimeLearner.inNightMinutes(3 * 60, startMin: 1320, endMin: 420))
+        XCTAssertTrue(MealTimeLearner.inNightMinutes(0, startMin: 1320, endMin: 420))
+        XCTAssertFalse(MealTimeLearner.inNightMinutes(420, startMin: 1320, endMin: 420))
+        XCTAssertFalse(MealTimeLearner.inNightMinutes(12 * 60, startMin: 1320, endMin: 420))
+    }
+
+    func testNightWindowInsideOneDayAndEqualTimes() {
+        XCTAssertTrue(MealTimeLearner.inNightMinutes(3 * 60, startMin: 60, endMin: 360))
+        XCTAssertFalse(MealTimeLearner.inNightMinutes(23 * 60, startMin: 60, endMin: 360))
+        // equal times are an empty window, as NightMode has it
+        XCTAssertFalse(MealTimeLearner.inNightMinutes(3 * 60, startMin: 360, endMin: 360))
+    }
+
+    func testLearnedOvernightSessionsDroppedDaytimeKept() {
+        // Six 04:30 sessions on six days form a trusted mode; filtered, they cannot.
+        let night = (1 ... 6).map { ts(day: $0, hour: 4, minute: 30) }
+        let day = (1 ... 6).map { ts(day: $0, hour: 8) }
+        let h = MealTimeHistory(events: night + day)
+        XCTAssertNotNil(MealTimeLearner.preMealWindow(h, nowMin: 3 * 60 + 40, localOffsetMs: 0, leadMaxMin: 60))
+        let f = MealTimeLearner.withoutNightEvents(h, nightStartMin: 22 * 60, nightEndMin: 7 * 60, localOffsetMs: 0)
+        XCTAssertEqual(f.events, day)
+        // the lowered target can no longer open at 03:40 for the 04:30 mode
+        XCTAssertNil(MealTimeLearner.preMealWindow(f, nowMin: 3 * 60 + 40, localOffsetMs: 0, leadMaxMin: 60))
+        // the breakfast mode survives
+        XCTAssertNotNil(MealTimeLearner.preMealWindow(f, nowMin: 7 * 60 + 5, localOffsetMs: 0, leadMaxMin: 60))
+    }
+
+    func testNothingDroppedReturnsSameHistory() {
+        let h = MealTimeHistory(events: (1 ... 3).map { ts(day: $0, hour: 12) })
+        XCTAssertEqual(MealTimeLearner.withoutNightEvents(h, nightStartMin: 1320, nightEndMin: 420, localOffsetMs: 0), h)
+    }
 }

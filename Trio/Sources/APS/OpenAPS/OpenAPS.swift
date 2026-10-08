@@ -814,7 +814,9 @@ final class OpenAPS {
                     // The recommended routing is the temp basal unless the user has forced a bolus.
                     // The override is always honoured, and recorded in the reason when it applies.
                     primerUseTempBasal: preferences.boostV5PrimerTbrFallback
-                        && !preferences.boostV5PrimerBolusMode
+                        && !preferences.boostV5PrimerBolusMode,
+                    nightStartMinute: BoostV5Adapter.nightWindowMinutes(preferences).start,
+                    nightEndMinute: BoostV5Adapter.nightWindowMinutes(preferences).end
                 ),
                 clock: clock,
                 recentSmbUnits60m: recentSmb60,
@@ -835,7 +837,11 @@ final class OpenAPS {
                 // base oref1 SMB (which respects night mode + its own hypo/minGuard gates) — because
                 // `asleep` reflects ONLY the HR sleep-state machine, never the boost-window gate.
                 let sleepInActive = BoostV5Adapter.sleepInActive(preferences: preferences, clock: clock)
-                let boostActive = !BoostV5Adapter.isInNightSleepPeriod(preferences: preferences, clock: clock)
+                // 2026-10-08 (AAPS 47a815aedf): the gate also closes inside the configured night
+                // window whatever the night-mode toggle says, and while the detector reads SLEEPING
+                // (held for one hysteresis period after a boundary exit, a33752c9aa #18). See
+                // BoostV5Adapter.boostGateOpen.
+                let boostActive = BoostV5Adapter.boostGateOpen(preferences: preferences, clock: clock)
                     && !sleepInActive
                 if microBolusAllowed, !asleep, boostActive {
                     // Anti-stacking hard gate — faithful port of OpenAPSBoostPlugin.kt:1262. The
