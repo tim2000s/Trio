@@ -10,6 +10,13 @@ final class OpenAPS {
     /// released is insulin not given.
     private static let confirmTranche = ConfirmTranche()
 
+    /// The base engine's temp for the primer's temp-basal decision (AAPS a33752c9aa, audit item 10):
+    /// the returned rate when there is one, otherwise the temp still running, since a determination
+    /// with no rate leaves it in place. Nil when neither exists.
+    static func effectiveBaseTempRate(_ returnedRate: Decimal?, currentTemp: TempBasal) -> Decimal? {
+        returnedRate ?? (currentTemp.duration > 0 ? currentTemp.rate : nil)
+    }
+
     private let storage: FileStorage
     private let tddStorage: TDDStorage
     private let glucoseStorage: GlucoseStorage
@@ -820,9 +827,15 @@ final class OpenAPS {
                 ),
                 clock: clock,
                 recentSmbUnits60m: recentSmb60,
-                timeSinceLastSmbMin: timeSinceSmb
+                timeSinceLastSmbMin: timeSinceSmb,
+                manualBolusWithinWindow: BoostV5Adapter.manualBolusWithinWindow(pumpHistory, clock: clock),
+                pumpSuspended: BoostV5Adapter.pumpSuspended(pumpHistory, clock: clock),
+                profileSwitchKey: BoostV5Adapter.profileSwitchKey(trioCustomOrefVariables)
             )
             det.reason += " " + result.reason
+            // Set when the confirm tranche ran inside the override block this cycle. A hold left
+            // over on any other cycle is dropped after the override chain (AAPS a33752c9aa, #1).
+            var trancheRan = false
             if boostMode == .active {
                 // Sleep gate — faithful port of Boost-V6 OpenAPSBoostPlugin.kt:1239: V5 drives the
                 // SMB only when a microbolus is allowed AND not SLEEPING. While asleep the override
@@ -910,16 +923,21 @@ final class OpenAPS {
                     // a rule on quantities the loop already holds clears the threshold. It can only
                     // ever deliver less than the engine would without it.
                     //
-                    // Evaluated inside this guarded block deliberately. Ten minutes after a confirm
-                    // the block runs on 76.4% of cycles, and the rest divides into exactly two
-                    // causes, the rolling cumulative cap and the sleep gate, both states in which
-                    // the engine has already decided against a microbolus. A release that cannot
-                    // land is that machinery agreeing with the withhold.
-                    if preferences.boostV5ConfirmTranche {
+                    // Since 2026-10-08 (AAPS a33752c9aa, audit item 1) the release is held to the
+                    // same bounds as the rest of the dose: released only in COMMITTED (a CONFIRMED
+                    // cycle replaces the hold), never when a phase-3 hard gate fired or inside the
+                    // post-rescue window, and clamped to the maxIOB headroom and the CONFIRMED cap
+                    // left after this cycle's dose. It runs only on cycles where V6 drives the SMB,
+                    // which in AAPS excludes the rolling cumulative cap; any other cycle drops the
+                    // hold (after the override chain), so a hold never outlives a cycle on which
+                    // the engine decided against V6.
+                    if preferences.boostV5ConfirmTranche, !cumulativeCapReached {
+                        trancheRan = true
                         let tranche = Self.confirmTranche
                         tranche.immediateFraction = (preferences.boostV5TrancheFraction as NSDecimalNumber).doubleValue
                         tranche.releaseThreshold = (preferences.boostV5TrancheThreshold as NSDecimalNumber).doubleValue
                         let sized = boostDose
+                        var trancheGateNote = ""
                         let nowMs = clock.timeIntervalSince1970 * 1000.0
                         let bgNow = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
                         if result.decision.mealHypothesis == .confirmed {
@@ -928,13 +946,31 @@ final class OpenAPS {
                                 sizedDose: (sized as NSDecimalNumber).doubleValue
                             ))
                         } else {
-                            boostDose = sized + Decimal(tranche.onCycle(nowMs: nowMs, bg: bgNow))
+                            let release = tranche.onCycleBounded(
+                                nowMs: nowMs, bg: bgNow,
+                                bounds: ConfirmTranche.ReleaseBounds(
+                                    inMealState: result.decision.mealHypothesis == .committed,
+                                    hardGateFired: result.decision.phase3.reductions.hardGateFired != nil,
+                                    postRescueWindow: inPostRescueWindow,
+                                    // Trio has no separate Boost maxIOB, so the profile maxIOB is
+                                    // both terms of AAPS's min(boost_maxIOB, max_iob).
+                                    ceilingU: ConfirmTranche.releaseCeiling(
+                                        cycleDoseU: (sized as NSDecimalNumber).doubleValue,
+                                        maxIobU: (preferences.maxIOB as NSDecimalNumber).doubleValue,
+                                        iobU: (iob.first?.iob as NSDecimalNumber?)?.doubleValue ?? 0,
+                                        confirmedCapU: (preferences.boostV5ConfirmedCapU as NSDecimalNumber).doubleValue
+                                    )
+                                )
+                            )
+                            trancheGateNote = release.note
+                            boostDose = sized + Decimal(release.units)
                         }
                         // Sized and delivered together, so the withheld amount is priced without
                         // needing a counterfactual.
                         det.reason += " tranche=\(String(format: "%.3f", (sized as NSDecimalNumber).doubleValue))," +
                             "\(String(format: "%.3f", (boostDose as NSDecimalNumber).doubleValue))," +
                             "held=\(String(format: "%.3f", tranche.heldU));"
+                        if !trancheGateNote.isEmpty { det.reason += " trancheGate=\(trancheGateNote);" }
                     } else if result.decision.mealHypothesis == .idle {
                         // Drop any hold once the engine has left the meal state entirely, so a
                         // remainder cannot survive a toggle-off and a later session.
@@ -1084,18 +1120,23 @@ final class OpenAPS {
                             let currentBasal = profile.currentBasal ?? 0
                             let extraRate = Decimal(primerU) * (60 / durationMin)
                             let primerRate = currentBasal + extraRate
-                            let baseRate = det.rate
+                            // 2026-10-08 (AAPS a33752c9aa, audit item 10): when the base engine
+                            // returns no rate it leaves the running temp in place, which can be a
+                            // protective zero or low temp. The decision reads that running temp, not
+                            // only the returned rate, so the primer cannot replace it.
+                            let baseRate = Self.effectiveBaseTempRate(det.rate, currentTemp: currentTemp)
+                            let running = det.rate == nil && baseRate != nil ? ",running" : ""
                             if let baseRate, baseRate < currentBasal {
                                 det.reason += " primer=tbr-skipped(base temp " +
                                     "\(String(format: "%.3f", (baseRate as NSDecimalNumber).doubleValue)) < basal " +
-                                    "\(String(format: "%.3f", (currentBasal as NSDecimalNumber).doubleValue)));"
+                                    "\(String(format: "%.3f", (currentBasal as NSDecimalNumber).doubleValue))\(running));"
                             } else if let baseRate, baseRate >= primerRate {
                                 // The base engine already delivers at or above the primer rate, so
                                 // the primer adds nothing. Its rate and duration are left alone:
                                 // extending a high base temp would over-deliver.
                                 det.reason += " primer=tbr-subsumed(base " +
                                     "\(String(format: "%.3f", (baseRate as NSDecimalNumber).doubleValue)) >= primer " +
-                                    "\(String(format: "%.3f", (primerRate as NSDecimalNumber).doubleValue))U/h);"
+                                    "\(String(format: "%.3f", (primerRate as NSDecimalNumber).doubleValue))U/h\(running));"
                             } else {
                                 det.rate = primerRate
                                 det.duration = max(det.duration ?? 0, durationMin)
@@ -1128,6 +1169,15 @@ final class OpenAPS {
                     det.reason += sleepInActive
                         ? " V6 override skipped (Boost inactive: morning lie-in) — base SMB stands;"
                         : " V6 override skipped (Boost inactive: night/sleep period) — base SMB stands;"
+                }
+                // A tranche hold survives only on cycles where V6 drove the SMB with the tranche on.
+                // Any other cycle (asleep, Boost inactive, no SMB allowed, the cumulative cap, or the
+                // tranche switched off) is the engine deciding against V6's dose, so the hold goes
+                // with it rather than being released later on stale evidence. (AAPS a33752c9aa, #1)
+                if !trancheRan, Self.confirmTranche.heldU > 0 {
+                    det.reason += " trancheGate=dropped:seam-skipped," +
+                        "\(String(format: "%.3f", Self.confirmTranche.heldU));"
+                    Self.confirmTranche.reset()
                 }
                 // AAPS night mode compares against the BASE profile target (pre-TT) and
                 // disables on an active low temp target clamped to LIMIT_TEMP_TARGET_BG (72–200).

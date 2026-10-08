@@ -91,6 +91,13 @@ enum BoostV5Adapter {
         // (0 U / 720 min) for the legacy 8-feature model where they are unused.
         recentSmbUnits60m: Double = 0.0,
         timeSinceLastSmbMin: Double = 720.0,
+        // 2026-10-05 announced meal (AAPS 82f47416c5): a manual or external bolus within
+        // mealAnnouncedBolusWindowMs. Carbs on board are read from the determination below.
+        manualBolusWithinWindow: Bool = false,
+        // 2026-10-08 meal-state reset triggers (AAPS 6ab6cf9e3d). The pump's own suspend state, and
+        // the identity of the insulin-scaling override in force (nil when it could not be read).
+        pumpSuspended: Bool = false,
+        profileSwitchKey: String? = nil,
         store: BoostV5Store = .shared
     ) -> Result {
         let delta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
@@ -190,16 +197,36 @@ enum BoostV5Adapter {
         // Time-jump / long-gap reset: minutes since the last decide(). A normal ~5-min cycle is
         // <30 (no reset); a clock jump, timezone change, long loop/pump gap, or app restart (state
         // persisted in UserDefaults) yields a large value → MealHypothesis.resetIfNeeded clears the
-        // hypothesis (TIME_JUMP_RESET_MINUTES = 30). This is the wired reset signal in Trio;
-        // profileSwitched/pumpDisconnected/loopSuspended aren't exposed at this layer (left false),
-        // but any >30-min interruption from those is caught by the gap.
+        // hypothesis (TIME_JUMP_RESET_MINUTES = 30). Since 2026-10-08 decide() also derives the same
+        // reset from the state's own wall-clock anchor (AAPS c237a4d081).
+        //
+        // The other reset triggers (AAPS 6ab6cf9e3d, audit item 17) are wired from what Trio holds.
+        // Every reset sends the meal state to IDLE and keeps the single-confirm lock, so a trigger can
+        // only remove meal-state dosing, never add it.
+        //  - pumpDisconnected: the pump's suspend state, as the latest suspend or resume event in
+        //    pump history records it (AAPS reads RM.Mode.isPumpSuspended).
+        //  - profileSwitched: the insulin-scaling override in force differs from the one seen on the
+        //    previous cycle. A Trio override with an insulin percentage is the analogue of an AAPS
+        //    percentage profile switch. Boost's own activity percentage is applied inside the
+        //    determination and creates no override, so it does not trigger this. The first cycle
+        //    after a restart only records the key, since the staleness reset covers a restart.
+        //  - loopSuspended: false. Trio has no timed loop suspension of the kind AAPS's suspended
+        //    running modes represent; a loop that stops running is caught by the staleness reset.
         let nowMs = clock.timeIntervalSince1970 * 1000.0
+        let cob = dbl(determination.cob) ?? 0.0
+        let mealAnnounced = cob > 0 || manualBolusWithinWindow
         // Atomic load→decide→save under one lock: timeJumpMinutes, the state passed to decide(), and
         // the state written back must all come from the SAME locked snapshot. Otherwise a scheduled
         // loop overlapping a post-bolus determineBasalSync can lose an update (last-writer-wins) —
         // e.g. erase a CONFIRMED hypothesis so the next cycle re-fires its SMB for the same meal.
+        var profileSwitched = false
         let decision = store.mutateState { state -> V5Decision in
             let timeJumpMinutes = state.lastRunMs.map { abs((nowMs - $0) / 60000.0) } ?? 0.0
+            // Read and updated inside the store's lock, so overlapping cycles see one sequence.
+            if let key = profileSwitchKey {
+                profileSwitched = lastProfileSwitchKey.map { $0 != key } ?? false
+                lastProfileSwitchKey = key
+            }
 
             let inputs = V5Inputs(
                 delta: delta,
@@ -273,12 +300,16 @@ enum BoostV5Adapter {
                 primerCapU: mode == .active ? knobs.primerCapU : 0,
                 primerUseTempBasal: knobs.primerUseTempBasal,
                 nowMs: clock.timeIntervalSince1970 * 1000.0,
+                profileSwitched: profileSwitched,
+                pumpDisconnected: pumpSuspended,
+                loopSuspended: false,
                 timeJumpMinutes: timeJumpMinutes,
                 aggressionUserKnob: knobs.aggression,
                 hypoCautionUserKnob: knobs.hypoCaution,
                 sensitivityUserKnob: knobs.sensitivity,
                 confirmedCapU: knobs.confirmedCapU,
-                committedCapU: knobs.committedCapU
+                committedCapU: knobs.committedCapU,
+                mealAnnounced: mealAnnounced
             )
 
             let decision = BoostV5Engine.decide(inputs, persisted: state)
@@ -286,17 +317,26 @@ enum BoostV5Adapter {
             state.lastRunMs = nowMs
             return decision
         }
-        // V6 learning: record a fresh CONFIRMED commit (meal-time history → pre-meal target).
-        if decision.mealHypothesis == .confirmed, decision.mealHypothesisAge == 0 {
+        // V6 learning: record the start of a meal session (meal-time history → pre-meal target).
+        // Since 2026-10-05 (AAPS 82f47416c5) this keys on the session start, which is the fresh
+        // CONFIRMED for an unannounced meal and the direct COMMITTED for an announced one. A
+        // COMMITTED re-engaged inside a held session lock is not a new meal and is not recorded.
+        if decision.mealSessionStarted {
             recordMealSessionIfRecordable(knobs: knobs, clock: clock)
         }
-        let reason = reasonTag(
+        var reason = reasonTag(
             decision,
             mode: mode,
             mlHypoRisk: mlHypoRisk,
             mlMealLikely: mlMealLikely,
             activity: activity
         )
+        // Announced-meal telemetry, in the reason string as AAPS carries it.
+        if mealAnnounced { reason += " mealAnn=1,\(decision.mealSessionStarted ? "commit" : "-");" }
+        if decision.stateReset, pumpSuspended || profileSwitched {
+            reason += " v6reset[" + [pumpSuspended ? "pump" : nil, profileSwitched ? "profile" : nil]
+                .compactMap { $0 }.joined(separator: ",") + "];"
+        }
         return Result(decision: decision, reason: reason)
     }
 
@@ -316,6 +356,43 @@ enum BoostV5Adapter {
             return
         }
         BoostMealTimeStore.shared.recordConfirmed(at: clock)
+    }
+
+    /// The insulin-scaling override key seen on the previous cycle; nil before the first. In memory
+    /// only, as AAPS keeps it, and touched only inside `BoostV5Store.mutateState`, whose lock
+    /// serialises it.
+    private static var lastProfileSwitchKey: String?
+
+    /// Identity of the insulin-scaling override in force, the Trio analogue of an AAPS profile switch.
+    /// "none" when no override scales insulin. An override that changes only the target is a temp
+    /// target in AAPS terms and does not count.
+    static func profileSwitchKey(_ v: TrioCustomOrefVariables) -> String {
+        guard v.useOverride, v.overridePercentage != 100 else { return "none" }
+        return "\(v.overridePercentage)|\(v.isfAndCr)|\(v.isf)|\(v.cr)"
+    }
+
+    /// True when the latest pump suspend or resume event at or before `clock` is a suspend.
+    static func pumpSuspended(_ history: [PumpHistoryEvent], clock: Date) -> Bool {
+        history
+            .filter { ($0.type == .pumpSuspend || $0.type == .pumpResume) && $0.timestamp <= clock }
+            .max { $0.timestamp < $1.timestamp }?
+            .type == .pumpSuspend
+    }
+
+    /// True when a manual or external bolus of positive size lies within the announced-meal window
+    /// (AAPS 82f47416c5: BS.Type.NORMAL, which excludes SMBs and priming). Trio records a manual or
+    /// wizard bolus as a non-SMB bolus and a pen dose as external insulin; both count, since AAPS
+    /// logs a pen dose as a normal bolus too.
+    static func manualBolusWithinWindow(_ history: [PumpHistoryEvent], clock: Date) -> Bool {
+        let windowStart = clock.addingTimeInterval(-MealHypothesisConstants.mealAnnouncedBolusWindowMs / 1000)
+        return history.contains { e in
+            guard e.timestamp >= windowStart, e.timestamp <= clock, (e.amount ?? 0) > 0 else { return false }
+            switch e.type {
+            case .bolus: return e.isSMB != true
+            case .isExternal: return true
+            default: return false
+            }
+        }
     }
 
     /// What the harness consumes: the engine decision plus the telemetry string to append.
