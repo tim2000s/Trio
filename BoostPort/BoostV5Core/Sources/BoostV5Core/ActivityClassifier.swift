@@ -29,7 +29,9 @@ import Foundation
 ///   - RESISTANCE: profile unchanged, target 160
 ///   - STRESS: profile unchanged, target 160 (only when `hrStressDetection`)
 ///   - ACTIVE (step-only): profile activityPct, target 150
-///   - INACTIVE (step-only): profile inactivityPct, no activity target
+///   - INACTIVE (step-only): profile inactivityPct, no activity target. With HR integration on it
+///     needs HR in zone 1; zone 2 and above gives HR_ELEVATED and no usable HR gives
+///     HR_UNAVAILABLE, both without adjustment. It also needs the Boost gate open.
 ///   - normal / resting: no adjustment
 ///
 /// Pure, stateless, Foundation-only.
@@ -45,6 +47,13 @@ public enum ExerciseState: String, Codable, Sendable {
     case resistance
     case stress
     case resting
+    /// HR in zone 2 or above with low steps: the inactivity raise is withheld, target and profile
+    /// unchanged, and it is not exercise (AAPS 477e649338, "HR_ELEVATED").
+    case hrElevated
+    /// HR integration on but no usable HR (none in the window, or a frozen value): the inactivity
+    /// raise is withheld, since a missing heart rate is not evidence of rest (AAPS a33752c9aa #12,
+    /// "HR_UNAVAILABLE").
+    case hrUnavailable
 }
 
 /// Configurable thresholds. Defaults match the AAPS Boost preference defaults.
@@ -119,6 +128,11 @@ public struct ActivityInputs: Equatable, Sendable {
     public var asleep: Bool
     /// Steps-based morning lie-in. Covers oversleeping past the configured night end.
     public var sleepInActive: Bool
+    /// The Boost gate (`BoostGate.isOpen`, AAPS `boostActive`). Gates only the INACTIVE raise,
+    /// the one outcome of the classification that adds insulin; exercise, resistance and the
+    /// elevated-HR handling lower the profile or raise the target and run whatever it says
+    /// (AAPS a33752c9aa #11). Defaults open, which is the behaviour before 2026-10-08.
+    public var raiseGateOpen: Bool
     public var thresholds: ActivityThresholds
 
     public init(
@@ -130,6 +144,7 @@ public struct ActivityInputs: Equatable, Sendable {
         inNightWindow: Bool = false,
         asleep: Bool = false,
         sleepInActive: Bool = false,
+        raiseGateOpen: Bool = true,
         thresholds: ActivityThresholds
     ) {
         self.steps5 = steps5
@@ -140,6 +155,7 @@ public struct ActivityInputs: Equatable, Sendable {
         self.inNightWindow = inNightWindow
         self.asleep = asleep
         self.sleepInActive = sleepInActive
+        self.raiseGateOpen = raiseGateOpen
         self.thresholds = thresholds
     }
 }
@@ -186,9 +202,10 @@ public enum ActivityClassifier {
     /// always has some spread across a fifteen-minute window. Observed as a value pinned at 124 bpm
     /// all night, which mis-fired resistance on every cycle. (AAPS `isHrWindowFrozen`, 2026-07-16.)
     ///
-    /// Suppressing is safe-signed. The caller treats a frozen window as no HR signal and falls back
-    /// to step-only classification, which can only withhold an activity or target modifier, never
-    /// add insulin.
+    /// The caller treats a frozen window as no HR signal, which withholds every HR-driven activity
+    /// and target modifier. It is not read as rest: with HR integration on, the inactivity raise
+    /// needs positive HR evidence of rest and is withheld when there is none (AAPS a33752c9aa #12,
+    /// which corrected the earlier note that the step-only fallback was safe-side).
     public static func isHrWindowFrozen(
         readings: [SleepHrReading],
         nowMs: Double,
@@ -274,6 +291,22 @@ public enum ActivityClassifier {
             if t.hrStressDetection, hrState == .stress {
                 return result(.stress, profile: baselineProfilePercent, target: resistanceStressTargetBg)
             }
+            // 2026-09-28 (AAPS 477e649338): zone 2 with low steps is easy cycling or rowing, not
+            // sedentary, so the raise is withheld and nothing else changes. Zone 2 is also reached
+            // by ordinary daily HR, so it starts no exercise handling. 2026-10-08 (AAPS a33752c9aa
+            // #12): with HR integration on, no usable HR withholds the raise as well. The user chose
+            // HR as part of the evidence that they are sedentary, so its absence is unknown rather
+            // than rest. Fails closed: it can only withhold insulin.
+            if t.hrIntegrationEnabled,
+               inactivityRaiseBlockedByHr(avgHr: inputs.avgHeartRate, thresholds: t)
+            {
+                let state: ExerciseState = inputs.avgHeartRate > 0 ? .hrElevated : .hrUnavailable
+                return result(state, profile: baselineProfilePercent, target: nil)
+            }
+            // 2026-10-08 (AAPS a33752c9aa #11): the raise also needs the Boost gate open.
+            guard inputs.raiseGateOpen else {
+                return result(.normal, profile: baselineProfilePercent, target: nil)
+            }
             return result(.inactive, profile: t.inactivityPct, target: nil)
         }
 
@@ -319,6 +352,16 @@ public enum ActivityClassifier {
     public static func inactivitySuppressedByElevatedHr(avgHr: Double, thresholds t: ActivityThresholds) -> Bool {
         guard avgHr > 0 else { return false }
         return karvonenZone(hr: avgHr, rest: t.hrRestingBpm, max: t.hrMaxBpm) >= 3
+    }
+
+    /// Whether the inactivity raise is withheld on HR grounds (mirrors
+    /// `HrActivityCalculator.inactivityRaiseBlockedByHr`). True from zone 2 (HRR >= 30%) upward
+    /// (AAPS 477e649338), and true with no usable HR (AAPS a33752c9aa #12): the host passes 0 for
+    /// no reading in the window and for a frozen value, which is the Kotlin null classification.
+    /// Callers consult it only with HR integration on; with it off the raise stays step-only.
+    public static func inactivityRaiseBlockedByHr(avgHr: Double, thresholds t: ActivityThresholds) -> Bool {
+        guard avgHr > 0 else { return true }
+        return karvonenZone(hr: avgHr, rest: t.hrRestingBpm, max: t.hrMaxBpm) >= 2
     }
 
     /// HR + step fusion (mirrors `HrActivityCalculator.classify`).
@@ -387,6 +430,8 @@ public enum ActivityClassifier {
         case .inactive,
              .normal,
              .resting,
+             .hrElevated,
+             .hrUnavailable,
              .stress: // STRESS is inert (AAPS dead code) — never an exercise state
             return false
         }
