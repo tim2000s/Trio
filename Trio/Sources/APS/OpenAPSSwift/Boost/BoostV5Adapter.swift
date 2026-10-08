@@ -68,6 +68,11 @@ enum BoostV5Adapter {
         /// Delivery routing: true routes through a retractable temp basal. The host resolves the
         /// recommended fallback against the user's bolus override before passing it.
         var primerUseTempBasal: Bool = true
+        /// The configured night window in minutes of the day, read whatever the night-mode toggle
+        /// says (AAPS a33752c9aa #8: the meal-time learner records no session inside it). Defaults
+        /// are AAPS's 22:00 to 07:00; the host passes `nightWindowMinutes(preferences)`.
+        var nightStartMinute: Int = 1320
+        var nightEndMinute: Int = 420
     }
 
     static func run(
@@ -283,7 +288,7 @@ enum BoostV5Adapter {
         }
         // V6 learning: record a fresh CONFIRMED commit (meal-time history → pre-meal target).
         if decision.mealHypothesis == .confirmed, decision.mealHypothesisAge == 0 {
-            BoostMealTimeStore.shared.recordConfirmed(at: clock)
+            recordMealSessionIfRecordable(knobs: knobs, clock: clock)
         }
         let reason = reasonTag(
             decision,
@@ -293,6 +298,24 @@ enum BoostV5Adapter {
             activity: activity
         )
         return Result(decision: decision, reason: reason)
+    }
+
+    /// Records a meal session for the meal-time learner only when it starts outside the configured
+    /// night window with the detector AWAKE (AAPS a33752c9aa #8). Overnight sessions in the AAPS
+    /// field record were rises with no logged carbs, mostly while the detector read SLEEPING or
+    /// PRE_SLEEP, and enough of them move the lowered pre-meal target into the night.
+    static func recordMealSessionIfRecordable(knobs: V5Knobs, clock: Date) {
+        let inWindow = BoostGate.inNightWindow(
+            nowMinuteOfDay: minuteOfDay(clock),
+            startMinute: knobs.nightStartMinute,
+            endMinute: knobs.nightEndMinute
+        )
+        let sleepState = BoostActivityStore.shared.sleep(now: clock).state
+        guard MealTimeLearner.sessionRecordable(inNightWindow: inWindow, sleepState: sleepState) else {
+            debug(.openAPS, "V6 meal-time learner: session not recorded (night window=\(inWindow), sleep=\(sleepState.rawValue))")
+            return
+        }
+        BoostMealTimeStore.shared.recordConfirmed(at: clock)
     }
 
     /// What the harness consumes: the engine decision plus the telemetry string to append.
@@ -369,14 +392,59 @@ enum BoostV5Adapter {
     /// would flip Boost back on and re-fire a V6 dose while asleep. Sleep state is staleness-guarded
     /// (≤30 min) exactly as `nightMode()`'s sleepActive is. (2026-07-02, mirrors AAPS c94c5c72d6.)
     static func isInNightSleepPeriod(preferences: Preferences, clock: Date) -> Bool {
+        nightSleepPeriod(
+            preferences: preferences,
+            minuteOfDay: minuteOfDay(clock),
+            sleepState: BoostActivityStore.shared.sleep(now: clock).state
+        )
+    }
+
+    /// `isInNightSleepPeriod` on explicit inputs, so the activity monitor can evaluate it against
+    /// this refresh's sleep state rather than the stored snapshot.
+    static func nightSleepPeriod(preferences: Preferences, minuteOfDay: Int, sleepState: SleepState) -> Bool {
         guard preferences.boostNightModeEnabled else { return false }
-        let start = Int((dbl(preferences.boostNightModeStartHour) ?? 22) * 60)
-        let end = Int((dbl(preferences.boostNightModeEndHour) ?? 7) * 60)
-        let inWindow = minuteInWrapped(minuteOfDay(clock), start, end)
-        let sleepState = BoostActivityStore.shared.snapshot
-            .flatMap { clock.timeIntervalSince($0.updatedAt) <= 1800 ? ($0.sleepState?.state ?? .awake) : nil } ?? .awake
+        let (start, end) = nightWindowMinutes(preferences)
+        let inWindow = minuteInWrapped(minuteOfDay, start, end)
         let sleepActive = preferences.boostNightModeAutoBySleep && sleepState != .awake
         return inWindow || sleepActive
+    }
+
+    /// The configured night window in minutes of the day, defaulting to 22:00 to 07:00 as AAPS does.
+    static func nightWindowMinutes(_ preferences: Preferences) -> (start: Int, end: Int) {
+        (
+            Int((dbl(preferences.boostNightModeStartHour) ?? 22) * 60),
+            Int((dbl(preferences.boostNightModeEndHour) ?? 7) * 60)
+        )
+    }
+
+    /// Hold applied after a boundary exit: the detector's sleep hysteresis (10 min, as the monitor
+    /// configures it) plus one cycle.
+    static let sleepBoundaryHoldMin = BoostGate.boundaryExitHoldMin(sleepHysteresisMin: 10)
+
+    /// The Boost gate before the lie-in check (AAPS 47a815aedf `boostGateOpen`, with the a33752c9aa
+    /// #18 boundary-exit hold). Closed inside the configured night window whatever the night-mode
+    /// toggle says, inside the toggle-governed night/sleep period, and while the detector reads
+    /// SLEEPING with V6 the doser. Trio has no V1 tier engine, so a closed gate leaves the base oref
+    /// SMB, which is what AAPS reaches with Tier 8 alone.
+    static func boostGateOpen(preferences: Preferences, clock: Date) -> Bool {
+        let sleep = BoostActivityStore.shared.sleep(now: clock)
+        let minute = minuteOfDay(clock)
+        let (start, end) = nightWindowMinutes(preferences)
+        let signals = BoostGate.sleepSignals(
+            state: sleep.state,
+            nightSleepPeriodRaw: nightSleepPeriod(preferences: preferences, minuteOfDay: minute, sleepState: sleep.state),
+            nightModeEnabled: preferences.boostNightModeEnabled,
+            autoBySleep: preferences.boostNightModeAutoBySleep,
+            nowMs: clock.timeIntervalSince1970 * 1000.0,
+            lastBoundaryExitMs: sleep.lastBoundaryExitMs,
+            holdMin: sleepBoundaryHoldMin
+        )
+        return BoostGate.isOpen(
+            nightSleepPeriod: signals.nightSleepPeriod,
+            inNightWindow: BoostGate.inNightWindow(nowMinuteOfDay: minute, startMinute: start, endMinute: end),
+            v6Active: preferences.boostMode == .active,
+            detectorSleeping: signals.detectorSleeping
+        )
     }
 
     /// Steps-based sleep-in (lie-in) — the FALSE-AWAKE backstop. In the first `boostSleepInHours` after

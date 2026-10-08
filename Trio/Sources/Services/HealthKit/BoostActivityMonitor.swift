@@ -201,16 +201,34 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             prev?.sleepState ?? SleepDetectorState(state: .awake, enteredAtMs: nowMs)
         )
         let asleep = sleep.state == .sleeping
+        if sleep.resumeBurstIgnored {
+            // AAPS 5a1c852a57: a batched-upload burst after a drought, with no steps, in the core night.
+            debug(.service, "Boost sleep: resume-burst-ignored (no steps)")
+        }
+        // A boundary exit this refresh starts the hold; otherwise carry the last one forward.
+        let lastBoundaryExitMs: Double? = sleep.wakeReason == "boundary" ? nowMs : prev?.lastSleepBoundaryExitMs
 
         // Activity classification runs AFTER the sleep detector because its inactivity branch is
         // excluded during sleep (AAPS 37a79aac83 / 483d2fec20) and needs this cycle's state. The
         // exclusions use the CONFIGURED night window rather than the learned one, matching the
-        // Kotlin, and read it whether or not night mode is enabled. `asleep` here is SLEEPING or
-        // PRE_SLEEP: the person is in bed for both.
+        // Kotlin, and read it whether or not night mode is enabled. `inBed` here is SLEEPING or
+        // PRE_SLEEP (the person is in bed for both), held for one hysteresis period after the
+        // detector leaves SLEEPING by its clock boundary (AAPS a33752c9aa #18).
         let inNightWindow = NightMode.minuteInWindow(
             now: nowMinute, start: configNightStart, end: configNightEnd
         )
-        let inBed = sleep.state == .sleeping || sleep.state == .preSleep
+        let sleepSignals = BoostGate.sleepSignals(
+            state: sleep.state,
+            nightSleepPeriodRaw: BoostV5Adapter.nightSleepPeriod(
+                preferences: prefs, minuteOfDay: nowMinute, sleepState: sleep.state
+            ),
+            nightModeEnabled: prefs.boostNightModeEnabled,
+            autoBySleep: prefs.boostNightModeAutoBySleep,
+            nowMs: nowMs,
+            lastBoundaryExitMs: lastBoundaryExitMs,
+            holdMin: BoostV5Adapter.sleepBoundaryHoldMin
+        )
+        let inBed = sleepSignals.detectorAsleep
         // Morning lie-in, computed locally from this cycle's steps rather than from the stored
         // snapshot (which is the previous cycle's). Window is [nightEnd, nightEnd + sleepInHours).
         let sleepInMinutes = Int(d(prefs.boostSleepInHours) * 60)
@@ -223,18 +241,28 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
         }()
         // Frozen-HR guard (AAPS 220d747d4d). A run of bit-identical readings across the 15-minute
         // averaging window is a stuck sensor value, not a heartbeat. Trusting a stuck elevated value
-        // mis-fires resistance every cycle. Pass 0, which the classifier already reads as no HR
-        // signal, so it falls back to step-only.
+        // mis-fires resistance every cycle. Pass 0, which the classifier reads as no HR signal: no
+        // HR-driven modifier, and with HR integration on the inactivity raise is withheld, since a
+        // stuck value is not evidence of rest (AAPS a33752c9aa #12).
         let hrFrozen = ActivityClassifier.isHrWindowFrozen(
             readings: hrReadings, nowMs: nowMs, windowMinutes: 15
         )
         if hrFrozen {
             debug(.service, "Boost activity: HR window frozen at \(avgHr) bpm — treating HR as unavailable")
         }
+        // The Boost gate as the loop will see it (AAPS a33752c9aa #11). Classification runs whatever
+        // it says; only the inactivity raise, which adds insulin, needs it open.
+        let raiseGateOpen = BoostGate.isOpen(
+            nightSleepPeriod: sleepSignals.nightSleepPeriod,
+            inNightWindow: inNightWindow,
+            v6Active: prefs.boostMode == .active,
+            detectorSleeping: sleepSignals.detectorSleeping
+        ) && !lieIn
         let activity = ActivityClassifier.classify(ActivityInputs(
             steps5: steps5, steps15: steps15, steps30: Int(steps30), steps60: steps60,
             avgHeartRate: hrFrozen ? 0 : avgHr,
             inNightWindow: inNightWindow, asleep: inBed, sleepInActive: lieIn,
+            raiseGateOpen: raiseGateOpen,
             thresholds: thresholds
         ))
 
@@ -338,13 +366,14 @@ final class BaseBoostActivityMonitor: BoostActivityMonitor, Injectable {
             activityBridge: bridgeNote,
             hrSource: hrRes.active,
             hrSourceStates: hrRes.note,
+            lastSleepBoundaryExitMs: lastBoundaryExitMs,
             updatedAt: now
         )
         BoostActivityStore.shared.snapshot = snap
 
         debug(
             .service,
-            "BoostActivityMonitor: steps5/15/30/60=\(steps5)/\(steps15)/\(Int(steps30))/\(steps60) hr=\(Int(latestHr)) rhr=\(Int(restingHr)) state=\(activity.state.rawValue) asleep=\(asleep) postEx=\(recovery.inRecoveryWindow)"
+            "BoostActivityMonitor: steps5/15/30/60=\(steps5)/\(steps15)/\(Int(steps30))/\(steps60) hr=\(Int(latestHr)) rhr=\(Int(restingHr)) state=\(activity.state.rawValue) asleep=\(asleep) postEx=\(recovery.inRecoveryWindow) gate=\(raiseGateOpen)\(sleepSignals.boundaryHold ? " boundaryHold" : "")"
         )
         debug(
             .service,

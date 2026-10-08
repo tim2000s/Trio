@@ -171,3 +171,83 @@ public enum NightMode {
         return now >= start || now < end
     }
 }
+
+/// Whether Boost may dose this cycle, before the lie-in check, and the sleep signals that feed it.
+///
+/// Port of `OpenAPSBoostPlugin.boostGateOpen` (AAPS 47a815aedf) and `sleepSignals` (AAPS
+/// a33752c9aa #18). Trio has no V1 tier engine, so with the gate closed the base oref SMB stands,
+/// which is what AAPS reaches with Tier 8 alone.
+public enum BoostGate {
+    /// The gate. Closed by any of:
+    ///  - `nightSleepPeriod`: the night-mode period (toggle-dependent, as before).
+    ///  - `inNightWindow`: the configured night window as a clock fact, whatever the night-mode
+    ///    toggle says. With the toggle off the gate used to stay open all night: on 2026-10-08 at
+    ///    05:30 an AAPS user received 1.95 U from a Boost tier with the detector reading SLEEPING.
+    ///  - `v6Active && detectorSleeping`: V6 stands down while SLEEPING, which also covers sleep
+    ///    outside the window (early nights, lie-ins).
+    /// The detector can only close the gate. It cannot reopen it inside the window, because a
+    /// batched heart-rate upload reads as a wake there. Carbs on board do not reopen it either.
+    public static func isOpen(
+        nightSleepPeriod: Bool,
+        inNightWindow: Bool,
+        v6Active: Bool,
+        detectorSleeping: Bool
+    ) -> Bool {
+        !nightSleepPeriod && !inNightWindow && !(v6Active && detectorSleeping)
+    }
+
+    /// The sleep signals the gate and the inactivity exclusion use, after the boundary-exit hold.
+    public struct SleepSignals: Equatable, Sendable {
+        /// SLEEPING, or inside the hold.
+        public let detectorSleeping: Bool
+        /// SLEEPING or PRE_SLEEP, or inside the hold.
+        public let detectorAsleep: Bool
+        /// The night/sleep period, held where it was sleep-driven.
+        public let nightSleepPeriod: Bool
+        /// Whether the hold applied this cycle (telemetry).
+        public let boundaryHold: Bool
+    }
+
+    /// Minutes the sleep exclusions are held after a boundary exit: the detector's sleep hysteresis
+    /// plus one five-minute cycle, the shortest time in which it can re-enter SLEEPING.
+    public static func boundaryExitHoldMin(sleepHysteresisMin: Int) -> Int {
+        max(sleepHysteresisMin, 0) + 5
+    }
+
+    /// Sleep signals with the boundary-exit hold (AAPS a33752c9aa #18). The detector can enter
+    /// SLEEPING up to 90 min before the night window opens, and its boundary rule ends a sleep
+    /// outside the window on the next cycle; it re-enters after the hysteresis. Each such exit left
+    /// one cycle reading AWAKE, which opened the inactivity raise and, with sleep-driven night mode,
+    /// the gate. For `holdMin` minutes after a boundary exit the user is treated as SLEEPING for the
+    /// gate and the inactivity exclusion, and the night/sleep period is held where it was
+    /// sleep-driven (night mode and auto-by-sleep both on). The same rule ends a sleep at the
+    /// morning boundary, where the hold delays Boost by one hysteresis period, the conservative
+    /// direction. Genuine wakes (steps, HR, resume) record no boundary exit and are not held.
+    public static func sleepSignals(
+        state: SleepState,
+        nightSleepPeriodRaw: Bool,
+        nightModeEnabled: Bool,
+        autoBySleep: Bool,
+        nowMs: Double,
+        lastBoundaryExitMs: Double?,
+        holdMin: Int
+    ) -> SleepSignals {
+        let sleeping = state == .sleeping
+        let hold: Bool = {
+            guard !sleeping, let exit = lastBoundaryExitMs else { return false }
+            return nowMs >= exit && nowMs - exit < Double(holdMin) * 60000
+        }()
+        return SleepSignals(
+            detectorSleeping: sleeping || hold,
+            detectorAsleep: sleeping || state == .preSleep || hold,
+            nightSleepPeriod: nightSleepPeriodRaw || (hold && nightModeEnabled && autoBySleep),
+            boundaryHold: hold
+        )
+    }
+
+    /// The configured night window as a clock fact, read whatever the night-mode toggle says.
+    /// Same `[start, end)` wrap semantics as `NightMode`, equal times being an empty window.
+    public static func inNightWindow(nowMinuteOfDay: Int, startMinute: Int, endMinute: Int) -> Bool {
+        NightMode.minuteInWindow(now: nowMinuteOfDay, start: startMinute, end: endMinute)
+    }
+}

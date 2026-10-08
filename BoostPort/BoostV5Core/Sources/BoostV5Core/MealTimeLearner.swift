@@ -87,6 +87,57 @@ public enum MealTimeLearner {
         return MealTimeHistory(events: newEvents)
     }
 
+    // MARK: - Night exclusion (AAPS a33752c9aa #8)
+
+    /// True when local `minOfDay` lies in the night window `[startMin, endMin)`. A window that wraps
+    /// midnight (start later than end, e.g. 22:00 to 07:00) is the union of `[start, 1440)` and
+    /// `[0, end)`, so 23:30 and 03:00 are both inside and 07:00 is not. Equal times are an empty
+    /// window, the same convention as `NightMode`, so a misconfigured window drops nothing.
+    public static func inNightMinutes(_ minOfDay: Int, startMin: Int, endMin: Int) -> Bool {
+        NightMode.minuteInWindow(now: minOfDay, start: startMin, end: endMin)
+    }
+
+    /// `h` without the events whose local time falls inside the configured night window. Before the
+    /// learner was gated on the night window and the sleep detector it recorded overnight sessions,
+    /// which in the AAPS field record were rises with no logged carbs, mostly while the detector read
+    /// SLEEPING or PRE_SLEEP; enough of them form a mode and move the lowered pre-meal target into
+    /// the night. Returns `h` itself when nothing is dropped.
+    public static func withoutNightEvents(
+        _ h: MealTimeHistory,
+        nightStartMin: Int,
+        nightEndMin: Int,
+        localOffsetMs: Double
+    ) -> MealTimeHistory {
+        let kept = h.events.filter {
+            !inNightMinutes(msToMinOfDay($0, localOffsetMs: localOffsetMs), startMin: nightStartMin, endMin: nightEndMin)
+        }
+        return kept.count == h.events.count ? h : MealTimeHistory(events: kept)
+    }
+
+    /// The learner records a session only when it starts outside the configured night window with
+    /// the detector AWAKE.
+    public static func sessionRecordable(inNightWindow: Bool, sleepState: SleepState) -> Bool {
+        !inNightWindow && sleepState == .awake
+    }
+
+    /// Why the learned pre-meal target must not apply this cycle, or nil when it may. The target
+    /// lowers glucose targets in the hour before a learned meal time, and in AAPS it was applying
+    /// while asleep and under a user's own temp target. It applies only outside the configured night
+    /// window, with the detector neither SLEEPING nor PRE_SLEEP, with no temp target and outside the
+    /// post-rescue window. Each block can only remove insulin.
+    public static func preMealTargetBlock(
+        inNightWindow: Bool,
+        sleepState: SleepState,
+        tempTargetActive: Bool,
+        postRescueWindow: Bool
+    ) -> String? {
+        if inNightWindow { return "night window" }
+        if sleepState == .sleeping || sleepState == .preSleep { return "asleep" }
+        if tempTargetActive { return "temp target" }
+        if postRescueWindow { return "post-rescue" }
+        return nil
+    }
+
     // MARK: - Clustering
 
     /// Greedily cluster the history's events into trusted meal modes (descending

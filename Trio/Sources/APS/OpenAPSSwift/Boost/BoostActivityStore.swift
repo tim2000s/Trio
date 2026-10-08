@@ -39,6 +39,12 @@ struct BoostActivitySnapshot: Codable, Sendable {
     var hrSource: String? = nil // live HR source: appleWatch|garmin|hk:x, nil if feed died
     var hrSourceStates: String? = nil // per-source "src(fresh,count,ageMin)"
 
+    // When the sleep detector last left SLEEPING by its clock boundary (wakeReason "boundary"),
+    // epoch-ms. Read through `BoostGate.sleepSignals` to hold the sleep exclusions for one
+    // hysteresis period (AAPS a33752c9aa #18). Optional so older snapshots decode; nil = no hold,
+    // which is the behaviour before 2026-10-08.
+    var lastSleepBoundaryExitMs: Double? = nil
+
     var updatedAt: Date
 }
 
@@ -73,6 +79,13 @@ final class BoostActivityStore: @unchecked Sendable {
             return (false, false, false)
         }
         return (snap.exerciseActive, snap.inPostExerciseWindow, snap.asleep)
+    }
+
+    /// The detector's state from a fresh (≤ 30 min) snapshot, and the last boundary exit. Stale or
+    /// missing → AWAKE and no exit, the same staleness convention as `flags(now:)`.
+    func sleep(now: Date) -> (state: SleepState, lastBoundaryExitMs: Double?) {
+        guard let snap = snapshot, now.timeIntervalSince(snap.updatedAt) <= 1800 else { return (.awake, nil) }
+        return (snap.sleepState?.state ?? .awake, snap.lastSleepBoundaryExitMs)
     }
 }
 

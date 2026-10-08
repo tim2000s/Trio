@@ -100,6 +100,14 @@ public enum SleepStateConstants {
     /// long BEFORE nightStart, and the gentle HR+steps wake is trusted only within this long of
     /// nightEnd (earlier genuine rising is caught by `wakeStepStrongThreshold`). (Kotlin: `SLEEP_SCHEDULE_TOLERANCE_MIN = 90`)
     public static let sleepScheduleToleranceMin = 90
+    /// Steps (in the 15-min bucket, or cumulative growth over `wakeStepLookbackMin`) that must
+    /// accompany an HR transmission burst for it to count as a wake before the scheduled-wake grace
+    /// window (AAPS 5a1c852a57). Batched watch uploads produce a burst after a drought every 15 to
+    /// 30 min overnight with nobody awake; replayed in AAPS over 30 nights on six users this cut
+    /// AWAKE between 02:00 and 05:00 by 7.2 min per night [4.7, 9.9], with no distinguishable delay
+    /// to morning wakes. A threshold of 1 gave the same result; 20 leaves room for counts registered
+    /// by turning over in bed.
+    public static let resumeWakeMinSteps = 20
 }
 
 /// One (timestamp, cumulative stepsToday) observation for the trailing wake-evidence window
@@ -141,6 +149,10 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
     /// Count of consecutive cycles with avgHr above the wake floor; any miss (null or low) resets it.
     /// Persisted; a legacy blob without it decodes to 0.
     public var hrHighStreak: Int
+    /// True on a cycle where a resume burst arrived while SLEEPING but was not corroborated by
+    /// steps, so it did not wake the detector (AAPS 5a1c852a57 "resume-burst-ignored"). TRANSIENT,
+    /// like `wakeReason`: telemetry for the host, never persisted.
+    public var resumeBurstIgnored: Bool = false
 
     public init(
         state: SleepState = .awake,
@@ -187,6 +199,7 @@ public struct SleepDetectorState: Codable, Equatable, Sendable {
         lastFreshHrSampleMs = try c.decodeIfPresent(Double.self, forKey: .lastFreshHrSampleMs) ?? 0
         sleepEntryReason = try c.decodeIfPresent(String.self, forKey: .sleepEntryReason)
         wakeReason = nil // transient — never persisted/decoded
+        resumeBurstIgnored = false // transient
         stepSamples = try c.decodeIfPresent([SleepStepSample].self, forKey: .stepSamples) ?? []
         hrHighStreak = try c.decodeIfPresent(Int.self, forKey: .hrHighStreak) ?? 0
     }
@@ -350,8 +363,19 @@ public enum SleepStateDetector {
         let priorDroughtMinutes = state.lastFreshHrSampleMs > 0
             ? Int((inputs.nowMs - state.lastFreshHrSampleMs) / C.msPerMinute)
             : Int.max
-        let transmissionResumeWake = freshSamplesInLast15Min >= C.transmissionResumeSampleCount &&
+        let resumeBurst = freshSamplesInLast15Min >= C.transmissionResumeSampleCount &&
             priorDroughtMinutes >= inputs.droughtThresholdMin
+        // 2026-10-08 (AAPS 5a1c852a57): a burst alone is not a wake. Watches that upload HR in
+        // batches produce a burst after a drought all night, and each one woke the detector. In the
+        // core night it now needs step evidence. From sleepScheduleToleranceMin before the scheduled
+        // wake it still wakes on the burst alone: the burst that answers a morning wake often lands
+        // before the steps do, and it consumes the drought, so a later step lump would find no burst
+        // to confirm. The Kotlin also exempts the lie-in, because AAPS 3111f79ee2 holds SLEEPING
+        // through it. This detector exits SLEEPING at the night end, where the lie-in begins, so the
+        // two never coincide and that clause has nothing to act on here.
+        let resumeCorroborated = nearScheduledWake ||
+            inputs.steps15min >= C.resumeWakeMinSteps || stepsInLookback >= C.resumeWakeMinSteps
+        let transmissionResumeWake = resumeBurst && resumeCorroborated
 
         var transitioned = false
 
@@ -475,6 +499,8 @@ public enum SleepStateDetector {
         }
 
         _ = transitioned
+        // Set every cycle, so a flag carried in an in-memory previous state never survives it.
+        newState.resumeBurstIgnored = resumeBurst && !resumeCorroborated && state.state == .sleeping
         return newState
     }
 

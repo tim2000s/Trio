@@ -168,14 +168,15 @@ final class ActivityClassifierTests: XCTestCase {
     func testStressIsInertMatchingAAPS() {
         // STRESS is dead code in AAPS (never reaches activityState / never raises target). The port
         // mirrors that: even with hrStressDetection ON, low steps + zone 2-3 must NOT classify STRESS.
-        // It falls through identically to the detection-off case (INACTIVE here: steps60 100 < 500).
+        // It falls through identically to the detection-off case. At 100 bpm (zone 2) that is now
+        // HR_ELEVATED with the inactivity raise withheld (AAPS 477e649338), where it was INACTIVE.
         let onInputs = ActivityInputs(
             steps5: 0, steps15: 0, steps30: 0, steps60: 100,
             avgHeartRate: 100, thresholds: hrThresholds(stress: true)
         )
         let on = ActivityClassifier.classify(onInputs)
         XCTAssertNotEqual(on.state, .stress)
-        XCTAssertEqual(on.state, .inactive)
+        XCTAssertEqual(on.state, .hrElevated)
         XCTAssertNil(on.targetBgMgdl) // no 160 target raise
         XCTAssertFalse(on.exerciseActive)
 
@@ -185,7 +186,7 @@ final class ActivityClassifierTests: XCTestCase {
         )
         let off = ActivityClassifier.classify(offInputs)
         XCTAssertEqual(off.state, on.state) // identical with detection on or off
-        XCTAssertEqual(off.profilePercent, 130)
+        XCTAssertEqual(off.profilePercent, 100)
     }
 
     func testHrEnabledButNoHrSignalUsesStepOnly() {
@@ -245,10 +246,11 @@ final class ActivityClassifierTests: XCTestCase {
         XCTAssertEqual(r.profilePercent, 100)
         XCTAssertEqual(r.targetBgMgdl, 160)
 
-        // Zone 2 on the same steps still takes the inactivity path, so the guard is not blanket.
+        // Zone 1 on the same steps still takes the inactivity path, so the guard is not blanket.
+        // (Zone 2 used to as well; since AAPS 477e649338 it withholds the raise, tested below.)
         let calm = ActivityInputs(
             steps5: 0, steps15: 64, steps30: 0, steps60: 64,
-            avgHeartRate: 100, thresholds: hrThresholds()
+            avgHeartRate: 65, thresholds: hrThresholds()
         )
         let c = ActivityClassifier.classify(calm)
         XCTAssertEqual(c.state, .inactive)
