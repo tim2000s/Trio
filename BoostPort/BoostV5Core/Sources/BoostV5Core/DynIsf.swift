@@ -242,4 +242,106 @@ public enum DynIsf {
             return 1.0
         }
     }
+
+    // MARK: - Sensitivity with TDD-based ISF off (AAPS 3d9d471dbb, f393d02e55, 1c6358ac6c)
+
+    /// BG impact on ISF as a fraction, as the engine uses it. With TDD-based ISF off it is 0 whatever
+    /// is stored, so the profile ISF is used flat (AAPS 3d9d471dbb read-time guard in
+    /// `calculateBoostIsf`). Without a TDD there is nothing for the BG curve to adapt, and with the curve
+    /// on, BG entered the dose through ISF and again through the target.
+    public static func effectiveVelocity(useTdd: Bool, velocityPct: Double) -> Double {
+        useTdd ? velocityPct / 100.0 : 0.0
+    }
+
+    /// ISF at target after autosens, for a static profile ISF (AAPS `autosensAdjustedIsf`, 1c6358ac6c).
+    /// Stock oref divides the profile ISF by the autosens ratio and uses the result for predictions and
+    /// for the dose. Boost builds every sensitivity from the ISF at target, so the ratio is applied
+    /// there. Not applied with TDD-based ISF (TDD owns sensitivity), with the no-TDD autosens switch
+    /// off, when a temp target has set its own ratio (stock lets that replace autosens rather than
+    /// stack), or for a ratio that is not positive.
+    public static func autosensAdjustedIsf(
+        sensNormalTarget: Double,
+        useTdd: Bool,
+        autosensWhenNoTdd: Bool,
+        tempTargetRatio: Double,
+        orefAutosensRatio: Double
+    ) -> Double {
+        if useTdd || !autosensWhenNoTdd || tempTargetRatio != 1.0 || orefAutosensRatio <= 0.0 {
+            return sensNormalTarget
+        }
+        return sensNormalTarget / orefAutosensRatio
+    }
+
+    /// The ratio that drives basal, the autosens target shift and carbohydrate absorption time under
+    /// Boost (AAPS `selectSensitivityRatio`). TDD-based ISF and oref autosens are alternative
+    /// adaptation mechanisms, never both: with TDD on the TDD model's ratio applies, with TDD off and
+    /// the no-TDD autosens switch on the oref ratio applies, and otherwise the ISF result's ratio, which
+    /// is 1.0 unless a temp target set one.
+    public static func selectSensitivityRatio(
+        useTdd: Bool,
+        autosensWhenNoTdd: Bool,
+        isfResultRatio: Double,
+        orefAutosensRatio: Double
+    ) -> Double {
+        if useTdd { return isfResultRatio }
+        if autosensWhenNoTdd { return orefAutosensRatio }
+        return isfResultRatio
+    }
+
+    /// The temp-target sensitivity ratio `calculateBoostIsf` derives, or 1.0 when no temp target sets
+    /// one. A high temp target raises sensitivity and a low one lowers it, each behind its own switch,
+    /// on the half-basal-target curve and clamped to the autosens limits. Used here to decide whether
+    /// a temp target replaces autosens.
+    public static func tempTargetRatio(
+        isTempTarget: Bool,
+        targetBg: Double,
+        normalTarget: Double,
+        halfBasalTarget: Double,
+        highTtRaisesSens: Bool,
+        lowTtLowersSens: Bool,
+        autosensMin: Double,
+        autosensMax: Double
+    ) -> Double {
+        guard isTempTarget,
+              (highTtRaisesSens && targetBg > normalTarget) || (lowTtLowersSens && targetBg < normalTarget)
+        else { return 1.0 }
+        let c = halfBasalTarget - normalTarget
+        guard c * (c + targetBg - normalTarget) > 0.0 else { return 1.0 }
+        return max(min(c / (c + targetBg - normalTarget), autosensMax), autosensMin)
+    }
+
+    /// BG impact on ISF after `reconcileSensitivitySettings`, with what was changed.
+    public struct SensitivitySettings: Equatable, Sendable {
+        public let velocityPct: Double
+        public let zeroedVelocity: Bool
+        public let restoredVelocity: Bool
+        public var changed: Bool { zeroedVelocity || restoredVelocity }
+    }
+
+    /// Settings that must not be on together (AAPS `reconcileSensitivitySettings`, 3d9d471dbb and
+    /// f393d02e55). With TDD-based ISF off, BG impact on ISF is set to 0, so the stored value matches
+    /// what `effectiveVelocity` already enforces. When TDD-based ISF is switched on it is set back to
+    /// `velocityOnPct` once, on that transition only, so a value chosen afterwards with TDD on is kept.
+    /// The AAPS half that clears "TDD sensitivity adjustment" has no Trio counterpart: the port never
+    /// had the 24 h / 7 d adjustment or its curve-ratio fallback.
+    public static func reconcileSensitivitySettings(
+        useTdd: Bool,
+        velocityPct: Double,
+        tddJustEnabled: Bool = false,
+        velocityOnPct: Double = 100.0
+    ) -> SensitivitySettings {
+        let zero = !useTdd && velocityPct != 0.0
+        let restore = useTdd && tddJustEnabled && velocityPct != velocityOnPct
+        return SensitivitySettings(
+            velocityPct: zero ? 0.0 : (restore ? velocityOnPct : velocityPct),
+            zeroedVelocity: zero,
+            restoredVelocity: restore
+        )
+    }
+
+    /// True when TDD-based ISF is on now and was recorded off. No record (nil) is not a transition, so
+    /// an upgrade leaves a TDD user's BG impact as it is and only records the state.
+    public static func isTddJustEnabled(lastUseTdd: Bool?, useTdd: Bool) -> Bool {
+        useTdd && lastUseTdd == false
+    }
 }

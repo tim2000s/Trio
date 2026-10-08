@@ -120,6 +120,10 @@ enum DeterminationGenerator {
             )
         }
 
+        // The oref autosens ratio as it arrived, before Trio's dynamic ISF or a temp target replaces
+        // it below. Boost's static-ISF autosens (AAPS 1c6358ac6c) must read this one.
+        let orefAutosensRatio = autosensData.ratio
+
         let dynamicIsfResult = DynamicISF.calculate(
             profile: profile,
             preferences: preferences,
@@ -162,13 +166,33 @@ enum DeterminationGenerator {
             return snap.profilePercent
         }()
 
+        // Boost sensitivity (AAPS 3d9d471dbb, 1c6358ac6c). TDD-based ISF and oref autosens are
+        // alternatives: with TDD on, autosens is not applied; with TDD off and "Autosens without TDD"
+        // on, the oref ratio adapts ISF (inside BoostISF), basal, the autosens target shift and
+        // carbohydrate absorption time, as it does in stock oref. Otherwise the ratio is neutral.
+        let boostAutosens: BoostISF.AutosensContext = boostActive ? .make(
+            orefRatio: orefAutosensRatio,
+            isTempTarget: profile.temptargetSet ?? false,
+            targetBg: profile.profileTarget(trioCustomOrefVariables: trioCustomOrefVariables) ?? 120,
+            profile: profile,
+            preferences: preferences
+        ) : .neutral
+        let boostSensitivityRatio = BoostISF.sensitivityRatio(autosens: boostAutosens, preferences: preferences)
+        // The ratio this cycle reports and feeds to the forecast: Boost's own choice in active mode,
+        // stock's otherwise, so the stock path is unchanged.
+        let effectiveSensitivityRatio = boostActive ? boostSensitivityRatio : sensitivityRatio
+
         var basal = profile.currentBasal ?? profile.basalFor(time: currentTime)
         basal *= trioCustomOrefVariables.overrideFactor()
         if boostActive {
-            // Boost replaces oref autosens with its own sensitivity model — do NOT autosens-adjust
-            // basal. Apply the activity profile % instead (active → lower, inactive → higher).
+            // Apply the activity profile % (active → lower, inactive → higher), then the selected
+            // sensitivity ratio, which is 1 unless autosens owns sensitivity (AAPS applies the
+            // activity % to the pump basal and determine_basal then multiplies by the ratio).
             if boostProfilePercent != 100 {
                 basal = (basal * Decimal(boostProfilePercent) / 100).jsRounded(scale: 3)
+            }
+            if boostSensitivityRatio != 1 {
+                basal = TempBasalFunctions.roundBasal(profile: profile, basalRate: basal * boostSensitivityRatio)
             }
         } else if dynamicIsfResult == nil {
             basal = computeAdjustedBasal(
@@ -187,8 +211,9 @@ enum DeterminationGenerator {
         }
 
         // this is the `sens` variable in JS, it's the adjusted sensitivity.
-        // Boost active mode swaps in Boost DynISF here (V1, no autosens, profile-% scaled), so
-        // eventualBG/predictions/insulinReq (and V5's baseInsulinReq) are Boost-flavoured.
+        // Boost active mode swaps in Boost DynISF here (V1, profile-% scaled, autosens only on a
+        // static ISF), so eventualBG/predictions/insulinReq (and V5's baseInsulinReq) are
+        // Boost-flavoured.
         let baseSensitivity = profile.sens ?? profile.sensitivityFor(time: currentTime)
         let adjustedSensitivity: Decimal
         if boostActive {
@@ -198,6 +223,7 @@ enum DeterminationGenerator {
                 tdd: trioCustomOrefVariables.tdd(profile: profile),
                 profilePercent: boostProfilePercent,
                 hourOfDay: Calendar.current.component(.hour, from: currentTime),
+                autosens: boostAutosens,
                 profile: profile,
                 preferences: preferences
             )
@@ -209,9 +235,17 @@ enum DeterminationGenerator {
             )
         }
 
+        // Under Boost the autosens target shift follows the selected ratio, as determine_basal's does
+        // in AAPS: the oref ratio when autosens owns sensitivity, neutral otherwise.
+        let targetAutosens = boostActive ? Autosens(
+            ratio: boostSensitivityRatio,
+            newisf: autosensData.newisf,
+            deviationsUnsorted: autosensData.deviationsUnsorted,
+            timestamp: autosensData.timestamp
+        ) : autosensData
         let (computedTargets, threshold) = adjustGlucoseTargets(
             profile: profile,
-            autosens: autosensData,
+            autosens: targetAutosens,
             trioCustomOrefVariables: trioCustomOrefVariables,
             temptargetSet: profile.temptargetSet ?? false,
             targetGlucose: profile.minBg ?? 100,
@@ -309,6 +343,7 @@ enum DeterminationGenerator {
             profileSens: trioCustomOrefVariables.override(sensitivity: baseSensitivity),
             tdd: trioCustomOrefVariables.tdd(profile: profile),
             profilePercent: boostProfilePercent,
+            autosens: boostAutosens,
             profile: profile,
             preferences: preferences
         ) : nil
@@ -339,7 +374,7 @@ enum DeterminationGenerator {
             dynamicIsfResult: dynamicIsfResult,
             targetGlucose: adjustedGlucoseTargets.targetGlucose,
             adjustedSensitivity: adjustedSensitivity,
-            sensitivityRatio: sensitivityRatio,
+            sensitivityRatio: effectiveSensitivityRatio,
             naiveEventualGlucose: naiveEventualGlucose,
             eventualGlucose: eventualGlucose,
             threshold: threshold,
@@ -357,7 +392,7 @@ enum DeterminationGenerator {
         // Build isfReason: "Autosens ratio: X, ISF: Y→Z"
         let originalSensitivity = profile.profileSensitivity(at: currentTime, trioCustomOrefVaribales: trioCustomOrefVariables)
         let isfReason =
-            "Autosens ratio: \(sensitivityRatio.jsRounded(scale: 2)), ISF: \(originalSensitivity.jsRounded())→\(adjustedSensitivity.jsRounded())"
+            "Autosens ratio: \(effectiveSensitivityRatio.jsRounded(scale: 2)), ISF: \(originalSensitivity.jsRounded())→\(adjustedSensitivity.jsRounded())"
 
         // Build targetLog: "X" or "X→Y" or "X→Y→Z" if target was adjusted
         let profileTarget = profile.profileTarget(trioCustomOrefVariables: trioCustomOrefVariables) ?? 100
@@ -443,7 +478,7 @@ enum DeterminationGenerator {
             units: nil,
             insulinReq: 0,
             eventualBG: Int(forecastResult.eventualGlucose.jsRounded()),
-            sensitivityRatio: sensitivityRatio, // this would only the AS-adjusted one for now
+            sensitivityRatio: effectiveSensitivityRatio, // this would only the AS-adjusted one for now
             rate: nil,
             duration: nil,
             iob: iobData.first?.iob,

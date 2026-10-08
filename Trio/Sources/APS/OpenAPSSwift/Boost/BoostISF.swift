@@ -9,8 +9,12 @@ import Foundation
 ///   variableSens = sensNormalTarget·(1 − (1−scaler)·velocity)  at current BG (soft cap)
 ///   × circadian (optional)
 ///
-/// IMPORTANT: oref autosens is intentionally NOT applied here — Boost DynISF replaces
-/// autosens. (AAPS Boost applies no oref autosens to ISF; it uses its own TDD model.)
+/// Sensitivity adaptation (AAPS 3d9d471dbb, f393d02e55, 1c6358ac6c, 24 September 2026). With TDD
+/// on, the TDD model owns sensitivity and oref autosens is not applied. With TDD off, BG impact on ISF
+/// is 0, so the profile ISF is used flat, and with `boostAutosensWhenNoTdd` on (the default) the oref
+/// autosens ratio divides the ISF at target, as stock oref divides `profile.sens`. Folding it in at
+/// target means predictions, the current BGI and `future_sens` all move with it. A temp target that
+/// sets its own sensitivity ratio replaces autosens rather than stacking with it.
 ///
 /// FLAGGED: the exact Boost weighted-8h TDD blend (1.4·4h + 0.6·8-4h …, pull-down) is NOT
 /// reproduced — Trio exposes only a single blended TDD (weightedAverage/currentTDD), not the
@@ -24,37 +28,24 @@ enum BoostISF {
         tdd: Decimal,
         profilePercent: Double,
         hourOfDay: Int,
+        autosens: AutosensContext,
         profile: Profile,
         preferences: Preferences
     ) -> Decimal {
         let divisor = insulinDivisor(profile: profile, preferences: preferences)
         let normalTarget = dbl(preferences.boostDynIsfNormalTarget)
         let bgCap = dbl(preferences.boostDynIsfBgCap)
-        let velocity = dbl(preferences.boostDynIsfVelocity) / 100.0
-        let adjFactor = dbl(preferences.boostDynIsfAdjustmentFactor) // percent
+        let velocity = effectiveVelocity(preferences)
         let bg = dbl(currentGlucose)
-        let tddValue = dbl(tdd)
-        let globalScale = profilePercent > 0 ? 100.0 / profilePercent : 1.0
 
-        var sensNormalTarget: Double
-        // Implausible-TDD guard (AAPS 5fc7951452): applied to the ADJUSTED TDD, matching the
-        // Kotlin, which applies the adjustment factor before the guard. Below the floor the
-        // derivation is skipped entirely and the profile ISF stands for this cycle.
-        let tddAdjusted = tddValue * adjFactor / 100.0
-        let tddImplausible = DynIsf.tddImplausibleForProfile(
-            tdd: tddAdjusted, profileSens: dbl(profileSens)
+        let sensNormalTarget = unroundedSensNormalTarget(
+            profileSens: profileSens,
+            tdd: tdd,
+            profilePercent: profilePercent,
+            autosens: autosens,
+            profile: profile,
+            preferences: preferences
         )
-        if preferences.boostUseTdd, tddValue > 0, !tddImplausible {
-            sensNormalTarget = DynIsf.isfTargetV1(
-                tdd: tddAdjusted,
-                normalTarget: normalTarget,
-                insulinDivisor: divisor
-            )
-        } else {
-            sensNormalTarget = dbl(profileSens)
-        }
-        // Profile-% inverse scaling (AAPS globalScale): active 80% → ISF ×1.25 (more sensitive).
-        sensNormalTarget *= globalScale
 
         var variableSens = DynIsf.getIsfByProfile(
             bg: bg,
@@ -71,7 +62,7 @@ enum BoostISF {
             variableSens *= CircadianISF.sensitivity(hourOfDay: hourOfDay)
         }
 
-        // No autosens division — Boost DynISF replaces oref autosens.
+        // Autosens, where it applies, is already in sensNormalTarget.
         return Decimal(variableSens).jsRounded(scale: 1)
     }
 
@@ -89,7 +80,7 @@ enum BoostISF {
             normalTarget: dbl(preferences.boostDynIsfNormalTarget),
             insulinDivisor: insulinDivisor(profile: profile, preferences: preferences),
             sensNormalTarget: sensNormalTarget,
-            velocity: dbl(preferences.boostDynIsfVelocity) / 100.0,
+            velocity: effectiveVelocity(preferences),
             bgCap: dbl(preferences.boostDynIsfBgCap),
             useCap: useCap
         )
@@ -101,6 +92,30 @@ enum BoostISF {
         profileSens: Decimal,
         tdd: Decimal,
         profilePercent: Double,
+        autosens: AutosensContext,
+        profile: Profile,
+        preferences: Preferences
+    ) -> Double {
+        let sens = unroundedSensNormalTarget(
+            profileSens: profileSens,
+            tdd: tdd,
+            profilePercent: profilePercent,
+            autosens: autosens,
+            profile: profile,
+            preferences: preferences
+        )
+        // AAPS stores sensNormalTarget rounded to 0.1 before getIsfByProfile/future_sens consume it.
+        return (sens * 10.0).rounded() / 10.0
+    }
+
+    /// The ISF at normal target before rounding, shared by `adjustedSensitivity` and
+    /// `sensNormalTarget` so the two cannot disagree: the prediction loops must never run a derived
+    /// ISF, or an autosens adjustment, that the dosing path did not.
+    private static func unroundedSensNormalTarget(
+        profileSens: Decimal,
+        tdd: Decimal,
+        profilePercent: Double,
+        autosens: AutosensContext,
         profile: Profile,
         preferences: Preferences
     ) -> Double {
@@ -108,8 +123,9 @@ enum BoostISF {
         let globalScale = profilePercent > 0 ? 100.0 / profilePercent : 1.0
         let tddValue = dbl(tdd)
         var sens: Double
-        // Same implausible-TDD guard as `adjustedSensitivity`. Both sites must agree, or the
-        // prediction loops would run a derived ISF the dosing path had already rejected.
+        // Implausible-TDD guard (AAPS 5fc7951452): applied to the ADJUSTED TDD, matching the
+        // Kotlin, which applies the adjustment factor before the guard. Below the floor the
+        // derivation is skipped entirely and the profile ISF stands for this cycle.
         let tddAdjusted = tddValue * dbl(preferences.boostDynIsfAdjustmentFactor) / 100.0
         let tddImplausible = DynIsf.tddImplausibleForProfile(
             tdd: tddAdjusted, profileSens: dbl(profileSens)
@@ -123,9 +139,65 @@ enum BoostISF {
         } else {
             sens = dbl(profileSens)
         }
-        // AAPS stores sensNormalTarget rounded to 0.1 before getIsfByProfile/future_sens consume it.
-        let scaled = sens * globalScale
-        return (scaled * 10.0).rounded() / 10.0
+        // Profile-% inverse scaling (AAPS globalScale): active 80% → ISF ×1.25 (more sensitive).
+        sens *= globalScale
+        // Autosens on a static profile ISF (AAPS 1c6358ac6c), after the scaling, as in the Kotlin.
+        return DynIsf.autosensAdjustedIsf(
+            sensNormalTarget: sens,
+            useTdd: preferences.boostUseTdd,
+            autosensWhenNoTdd: preferences.boostAutosensWhenNoTdd,
+            tempTargetRatio: autosens.tempTargetRatio,
+            orefAutosensRatio: autosens.orefRatio
+        )
+    }
+
+    /// BG impact on ISF as the engine uses it: 0 with TDD-based ISF off (AAPS 3d9d471dbb).
+    static func effectiveVelocity(_ preferences: Preferences) -> Double {
+        DynIsf.effectiveVelocity(useTdd: preferences.boostUseTdd, velocityPct: dbl(preferences.boostDynIsfVelocity))
+    }
+
+    /// What the autosens fold-in needs from the cycle: the oref autosens ratio, taken before Trio's
+    /// own dynamic ISF or a temp target replaces it, and the temp-target ratio Boost's ISF derivation
+    /// would set, which replaces autosens when it is not 1.
+    struct AutosensContext {
+        let orefRatio: Double
+        let tempTargetRatio: Double
+
+        static let neutral = AutosensContext(orefRatio: 1.0, tempTargetRatio: 1.0)
+
+        static func make(
+            orefRatio: Decimal,
+            isTempTarget: Bool,
+            targetBg: Decimal,
+            profile: Profile,
+            preferences: Preferences
+        ) -> AutosensContext {
+            AutosensContext(
+                orefRatio: dbl(orefRatio),
+                tempTargetRatio: DynIsf.tempTargetRatio(
+                    isTempTarget: isTempTarget,
+                    targetBg: dbl(targetBg),
+                    normalTarget: dbl(preferences.boostDynIsfNormalTarget),
+                    halfBasalTarget: dbl(profile.halfBasalExerciseTarget),
+                    highTtRaisesSens: profile.highTemptargetRaisesSensitivity,
+                    lowTtLowersSens: profile.lowTemptargetLowersSensitivity,
+                    autosensMin: dbl(profile.autosensMin),
+                    autosensMax: dbl(profile.autosensMax)
+                )
+            )
+        }
+    }
+
+    /// The ratio that drives basal, the autosens target shift and carbohydrate absorption time under
+    /// Boost (AAPS `selectSensitivityRatio`). The ISF result's own ratio is 1.0 here, because the TDD
+    /// 24 h / 7 d adjustment and Boost's temp-target ISF ratio are not ported (see BOOST.md).
+    static func sensitivityRatio(autosens: AutosensContext, preferences: Preferences) -> Decimal {
+        Decimal(DynIsf.selectSensitivityRatio(
+            useTdd: preferences.boostUseTdd,
+            autosensWhenNoTdd: preferences.boostAutosensWhenNoTdd,
+            isfResultRatio: 1.0,
+            orefAutosensRatio: autosens.orefRatio
+        ))
     }
 
     /// Boost dosing sensitivity (`future_sens`), faithful to AAPS DetermineBasalBoost (~750-787).
@@ -158,7 +230,7 @@ enum BoostISF {
             sensNormalTarget: sensNormalTarget,
             normalTarget: dbl(preferences.boostDynIsfNormalTarget),
             insulinDivisor: insulinDivisor(profile: profile, preferences: preferences),
-            velocity: dbl(preferences.boostDynIsfVelocity) / 100.0,
+            velocity: effectiveVelocity(preferences),
             bgCap: dbl(preferences.boostDynIsfBgCap)
         )
         return Decimal(value)
