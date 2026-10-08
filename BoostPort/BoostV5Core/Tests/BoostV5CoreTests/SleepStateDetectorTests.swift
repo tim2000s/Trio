@@ -165,8 +165,9 @@ final class SleepStateDetectorTests: XCTestCase {
             SleepHrReading(timestampMs: now - 1 * minute, beatsPerMinute: 72, durationMs: 1000),
             SleepHrReading(timestampMs: now, beatsPerMinute: 74, durationMs: 1000)
         ]
-        // Still inside the outer window (02:00) so the hard morning exit isn't what wakes it.
-        let inputs = makeInputs(hrReadings: burst, steps15min: 0, nowMinuteOfDay: 120, nowMs: now)
+        // Still inside the outer window (02:00) so the hard morning exit isn't what wakes it. In the
+        // core night the burst now needs steps (AAPS 5a1c852a57); 20 in the 15-min bucket suffice.
+        let inputs = makeInputs(hrReadings: burst, steps15min: 20, nowMinuteOfDay: 120, nowMs: now)
         state = D.step(inputs, state)
         XCTAssertEqual(state.state, .awake)
     }
@@ -552,5 +553,101 @@ final class SleepStateDetectorTests: XCTestCase {
         XCTAssertEqual(SleepState.awake.rawValue, "awake")
         XCTAssertEqual(SleepState.preSleep.rawValue, "preSleep")
         XCTAssertEqual(SleepState.sleeping.rawValue, "sleeping")
+    }
+
+    // MARK: Resume burst on a batched HR feed (AAPS 5a1c852a57)
+
+    // Batched feed: a batch every 15 min, sizes 2, 2, 5 in turn, timestamps spread back from 1 min
+    // before arrival. Ported from the Kotlin SleepResumeWakeTest fixture.
+    private let resumeT0 = 1_000_000_000_000.0
+
+    private func batchedReadings(at now: Double) -> [SleepHrReading] {
+        (0 ..< 24).flatMap { k -> [SleepHrReading] in
+            let arrive = resumeT0 + Double(k) * 15 * minute
+            guard arrive <= now else { return [] }
+            let size = k % 3 == 2 ? 5 : 2
+            return (1 ... size).map { j in
+                SleepHrReading(timestampMs: arrive - Double(j) * minute, beatsPerMinute: 58, durationMs: 60000)
+            }
+        }.filter { $0.timestampMs > now - 30 * minute && $0.timestampMs <= now }
+    }
+
+    /// SLEEPING at 01:00 with the last reliable sample 40 min ago, so the drought is established.
+    private func asleepAt0100() -> SleepDetectorState {
+        SleepDetectorState(state: .sleeping, enteredAtMs: resumeT0 - 2 * 3_600_000, lastFreshHrSampleMs: resumeT0 - 40 * minute)
+    }
+
+    private func resumeCycle(
+        _ s: SleepDetectorState, now: Double, minuteOfDay: Int, stepsToday: Int, steps15: Int = 0
+    ) -> SleepDetectorState {
+        D.step(makeInputs(
+            hrReadings: batchedReadings(at: now), restingHeartRate: 60, steps15min: steps15,
+            nowMinuteOfDay: minuteOfDay, nowMs: now, stepsToday: stepsToday
+        ), s)
+    }
+
+    func testBatchedHrOvernightDoesNotWake() {
+        var s = asleepAt0100()
+        var ignored = 0
+        // 01:00 to 05:00 at five-minute cycles, no steps at all
+        for c in 0 ... 48 {
+            s = resumeCycle(s, now: resumeT0 + Double(c) * 5 * minute, minuteOfDay: 60 + c * 5, stepsToday: 4200)
+            XCTAssertEqual(s.state, .sleeping, "cycle \(c)")
+            if s.resumeBurstIgnored { ignored += 1 }
+        }
+        // the fixture does reach the old wake condition (burst after drought) several times
+        XCTAssertGreaterThanOrEqual(ignored, 3)
+    }
+
+    func testBurstWithStepsMidNightStillWakesAtOnce() {
+        var s = asleepAt0100()
+        var woke: (Int, String?)?
+        for c in 0 ... 48 {
+            let minuteOfDay = 60 + c * 5
+            let up = minuteOfDay >= 180 // out of bed at 03:00, as a 5-sample batch lands
+            s = resumeCycle(
+                s, now: resumeT0 + Double(c) * 5 * minute, minuteOfDay: minuteOfDay,
+                stepsToday: up ? 4260 : 4200, steps15: up ? 60 : 0
+            )
+            if s.state == .awake { woke = (minuteOfDay, s.wakeReason); break }
+        }
+        XCTAssertEqual(woke?.0, 180)
+        XCTAssertEqual(woke?.1, "resume")
+    }
+
+    func testBurstNearScheduledWakeWakesWithoutSteps() {
+        var s = asleepAt0100()
+        var woke: (Int, String?)?
+        // 05:30 onwards: inside sleepScheduleToleranceMin of the 07:00 wake
+        for c in 0 ... 24 {
+            let minuteOfDay = 330 + c * 5
+            s = resumeCycle(s, now: resumeT0 + Double(c) * 5 * minute, minuteOfDay: minuteOfDay, stepsToday: 4200)
+            if s.state == .awake { woke = (minuteOfDay, s.wakeReason); break }
+        }
+        XCTAssertEqual(woke?.0, 360) // the first 5-sample batch, 30 min in
+        XCTAssertEqual(woke?.1, "resume")
+    }
+
+    func testBoundaryExitAtNightEndIsUnaffectedByResumeGate() {
+        // At the night end the boundary rule wakes, burst or not, so the step requirement never
+        // delays the morning exit. (The Kotlin lie-in exemption has no counterpart here: this
+        // detector does not hold SLEEPING past the night end.)
+        let now = resumeT0 + 30 * minute
+        let s = D.step(makeInputs(
+            hrReadings: batchedReadings(at: now), restingHeartRate: 60, steps15min: 0,
+            nowMinuteOfDay: 7 * 60, nowMs: now, stepsToday: 4200
+        ), asleepAt0100())
+        XCTAssertEqual(s.state, .awake)
+        XCTAssertEqual(s.wakeReason, "boundary")
+    }
+
+    func testResumeBurstIgnoredFlagIsTransient() throws {
+        var s = asleepAt0100()
+        s.resumeBurstIgnored = true
+        let data = try JSONEncoder().encode(s)
+        XCTAssertFalse(try JSONDecoder().decode(SleepDetectorState.self, from: data).resumeBurstIgnored)
+        // and a quiet cycle clears it
+        let next = D.step(makeInputs(avgHeartRate: 0, steps15min: 0, nowMinuteOfDay: 60, nowMs: resumeT0), s)
+        XCTAssertFalse(next.resumeBurstIgnored)
     }
 }
