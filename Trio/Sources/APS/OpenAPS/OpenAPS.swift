@@ -818,7 +818,10 @@ final class OpenAPS {
                 ),
                 clock: clock,
                 recentSmbUnits60m: recentSmb60,
-                timeSinceLastSmbMin: timeSinceSmb
+                timeSinceLastSmbMin: timeSinceSmb,
+                manualBolusWithinWindow: BoostV5Adapter.manualBolusWithinWindow(pumpHistory, clock: clock),
+                pumpSuspended: BoostV5Adapter.pumpSuspended(pumpHistory, clock: clock),
+                profileSwitchKey: BoostV5Adapter.profileSwitchKey(trioCustomOrefVariables)
             )
             det.reason += " " + result.reason
             if boostMode == .active {
