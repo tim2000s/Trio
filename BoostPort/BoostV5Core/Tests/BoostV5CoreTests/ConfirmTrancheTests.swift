@@ -172,9 +172,17 @@ final class ConfirmTrancheTests: XCTestCase {
 
     func testCeilingIsTheTighterOfMaxIobHeadroomAndTheConfirmCapNeverNegative() {
         // Headroom 3.0 - 1.8 - 0.5 = 0.7 against cap 2.0 - 0.5 = 1.5.
-        XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 3.0, iobU: 1.8, confirmedCapU: 2.0), 0.7, accuracy: 1E-9)
+        XCTAssertEqual(
+            ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 3.0, iobU: 1.8, confirmedCapU: 2.0),
+            0.7,
+            accuracy: 1E-9
+        )
         // Headroom 6.0 - 0.0 - 0.5 = 5.5 against cap 1.0 - 0.5 = 0.5.
-        XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 6.0, iobU: 0.0, confirmedCapU: 1.0), 0.5, accuracy: 1E-9)
+        XCTAssertEqual(
+            ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 6.0, iobU: 0.0, confirmedCapU: 1.0),
+            0.5,
+            accuracy: 1E-9
+        )
         // IOB already above maxIOB.
         XCTAssertEqual(ConfirmTranche.releaseCeiling(cycleDoseU: 0.5, maxIobU: 2.0, iobU: 2.2, confirmedCapU: 2.0), 0)
     }

@@ -64,8 +64,18 @@ final class BoostGateTests: XCTestCase {
             nowMs: exitAt + 5 * min, lastBoundaryExitMs: exitAt,
             holdMin: BoostGate.boundaryExitHoldMin(sleepHysteresisMin: 10)
         )
-        XCTAssertFalse(BoostGate.isOpen(nightSleepPeriod: s.nightSleepPeriod, inNightWindow: false, v6Active: false, detectorSleeping: s.detectorSleeping))
-        XCTAssertFalse(BoostGate.isOpen(nightSleepPeriod: s.nightSleepPeriod, inNightWindow: false, v6Active: true, detectorSleeping: s.detectorSleeping))
+        XCTAssertFalse(BoostGate.isOpen(
+            nightSleepPeriod: s.nightSleepPeriod,
+            inNightWindow: false,
+            v6Active: false,
+            detectorSleeping: s.detectorSleeping
+        ))
+        XCTAssertFalse(BoostGate.isOpen(
+            nightSleepPeriod: s.nightSleepPeriod,
+            inNightWindow: false,
+            v6Active: true,
+            detectorSleeping: s.detectorSleeping
+        ))
     }
 
     func testBoundaryExitHoldLapsesAfterHysteresisPlusOneCycle() {
@@ -118,15 +128,48 @@ final class BoostGateTests: XCTestCase {
     // MARK: - Pre-meal target and learner (#8)
 
     func testPreMealTargetAppliesOnlyOutsideNightAwakeNoTtOutsidePostRescue() {
-        XCTAssertNil(MealTimeLearner.preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: false, postRescueWindow: false))
+        XCTAssertNil(
+            MealTimeLearner
+                .preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: false, postRescueWindow: false)
+        )
     }
 
     func testPreMealTargetBlockedReasons() {
-        XCTAssertEqual(MealTimeLearner.preMealTargetBlock(inNightWindow: true, sleepState: .awake, tempTargetActive: false, postRescueWindow: false), "night window")
-        XCTAssertEqual(MealTimeLearner.preMealTargetBlock(inNightWindow: false, sleepState: .sleeping, tempTargetActive: false, postRescueWindow: false), "asleep")
-        XCTAssertEqual(MealTimeLearner.preMealTargetBlock(inNightWindow: false, sleepState: .preSleep, tempTargetActive: false, postRescueWindow: false), "asleep")
-        XCTAssertEqual(MealTimeLearner.preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: true, postRescueWindow: false), "temp target")
-        XCTAssertEqual(MealTimeLearner.preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: false, postRescueWindow: true), "post-rescue")
+        XCTAssertEqual(
+            MealTimeLearner
+                .preMealTargetBlock(inNightWindow: true, sleepState: .awake, tempTargetActive: false, postRescueWindow: false),
+            "night window"
+        )
+        XCTAssertEqual(
+            MealTimeLearner
+                .preMealTargetBlock(
+                    inNightWindow: false,
+                    sleepState: .sleeping,
+                    tempTargetActive: false,
+                    postRescueWindow: false
+                ),
+            "asleep"
+        )
+        XCTAssertEqual(
+            MealTimeLearner
+                .preMealTargetBlock(
+                    inNightWindow: false,
+                    sleepState: .preSleep,
+                    tempTargetActive: false,
+                    postRescueWindow: false
+                ),
+            "asleep"
+        )
+        XCTAssertEqual(
+            MealTimeLearner
+                .preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: true, postRescueWindow: false),
+            "temp target"
+        )
+        XCTAssertEqual(
+            MealTimeLearner
+                .preMealTargetBlock(inNightWindow: false, sleepState: .awake, tempTargetActive: false, postRescueWindow: true),
+            "post-rescue"
+        )
     }
 
     func testLearnerRecordsOnlyDaytimeSessionsWithDetectorAwake() {
@@ -163,7 +206,8 @@ final class BoostGateTests: XCTestCase {
 
     func testGateClosedVigorousAerobicStillReducesProfileFurther() {
         // zone 4 (140 bpm at rest 60, max 180) with high steps
-        let r = ActivityClassifier.classify(inputs(raiseGateOpen: false, stepsActive: true, avgHr: 140, hrIntegrationEnabled: true))
+        let r = ActivityClassifier
+            .classify(inputs(raiseGateOpen: false, stepsActive: true, avgHr: 140, hrIntegrationEnabled: true))
         XCTAssertEqual(r.state, .vigorousAerobic)
         XCTAssertEqual(r.profilePercent, 70)
     }

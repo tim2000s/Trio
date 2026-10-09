@@ -609,7 +609,8 @@ final class SleepStateDetectorTests: XCTestCase {
                 s, now: resumeT0 + Double(c) * 5 * minute, minuteOfDay: minuteOfDay,
                 stepsToday: up ? 4260 : 4200, steps15: up ? 60 : 0
             )
-            if s.state == .awake { woke = (minuteOfDay, s.wakeReason); break }
+            if s.state == .awake { woke = (minuteOfDay, s.wakeReason)
+                break }
         }
         XCTAssertEqual(woke?.0, 180)
         XCTAssertEqual(woke?.1, "resume")
@@ -622,7 +623,8 @@ final class SleepStateDetectorTests: XCTestCase {
         for c in 0 ... 24 {
             let minuteOfDay = 330 + c * 5
             s = resumeCycle(s, now: resumeT0 + Double(c) * 5 * minute, minuteOfDay: minuteOfDay, stepsToday: 4200)
-            if s.state == .awake { woke = (minuteOfDay, s.wakeReason); break }
+            if s.state == .awake { woke = (minuteOfDay, s.wakeReason)
+                break }
         }
         XCTAssertEqual(woke?.0, 360) // the first 5-sample batch, 30 min in
         XCTAssertEqual(woke?.1, "resume")

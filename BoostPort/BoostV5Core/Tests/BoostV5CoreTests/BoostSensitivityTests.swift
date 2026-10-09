@@ -30,13 +30,22 @@ final class BoostAutosensIsfTests: XCTestCase {
 
     func testVelocityIsZeroWithoutTdd() {
         XCTAssertEqual(DynIsf.effectiveVelocity(useTdd: false, velocityPct: 100), 0)
-        XCTAssertEqual(DynIsf.effectiveVelocity(useTdd: true, velocityPct: 60), 0.6, accuracy: 1e-12)
+        XCTAssertEqual(DynIsf.effectiveVelocity(useTdd: true, velocityPct: 60), 0.6, accuracy: 1E-12)
     }
 
     func testSelectedRatioFollowsTheOwningMechanism() {
-        XCTAssertEqual(DynIsf.selectSensitivityRatio(useTdd: true, autosensWhenNoTdd: true, isfResultRatio: 1.0, orefAutosensRatio: 1.3), 1.0)
-        XCTAssertEqual(DynIsf.selectSensitivityRatio(useTdd: false, autosensWhenNoTdd: true, isfResultRatio: 1.0, orefAutosensRatio: 1.3), 1.3)
-        XCTAssertEqual(DynIsf.selectSensitivityRatio(useTdd: false, autosensWhenNoTdd: false, isfResultRatio: 1.0, orefAutosensRatio: 1.3), 1.0)
+        XCTAssertEqual(
+            DynIsf.selectSensitivityRatio(useTdd: true, autosensWhenNoTdd: true, isfResultRatio: 1.0, orefAutosensRatio: 1.3),
+            1.0
+        )
+        XCTAssertEqual(
+            DynIsf.selectSensitivityRatio(useTdd: false, autosensWhenNoTdd: true, isfResultRatio: 1.0, orefAutosensRatio: 1.3),
+            1.3
+        )
+        XCTAssertEqual(
+            DynIsf.selectSensitivityRatio(useTdd: false, autosensWhenNoTdd: false, isfResultRatio: 1.0, orefAutosensRatio: 1.3),
+            1.0
+        )
     }
 
     func testTempTargetRatio() {
@@ -51,7 +60,7 @@ final class BoostAutosensIsfTests: XCTestCase {
         XCTAssertEqual(r(true, 140), 0.7)
         XCTAssertEqual(r(true, 140, high: false), 1.0)
         // 61 / (61 - 9) = 1.173, inside the limits.
-        XCTAssertEqual(r(true, 90), 61.0 / 52.0, accuracy: 1e-12)
+        XCTAssertEqual(r(true, 90), 61.0 / 52.0, accuracy: 1E-12)
         XCTAssertEqual(r(true, 90, low: false), 1.0)
         XCTAssertEqual(r(true, 99), 1.0)
     }

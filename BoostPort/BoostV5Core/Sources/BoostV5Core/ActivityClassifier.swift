@@ -427,11 +427,11 @@ public enum ActivityClassifier {
              .resistance,
              .vigorousAerobic:
             return true
-        case .inactive,
+        case .hrElevated,
+             .hrUnavailable,
+             .inactive,
              .normal,
              .resting,
-             .hrElevated,
-             .hrUnavailable,
              .stress: // STRESS is inert (AAPS dead code) — never an exercise state
             return false
         }

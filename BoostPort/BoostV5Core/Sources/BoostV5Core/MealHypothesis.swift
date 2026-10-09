@@ -60,8 +60,16 @@ public struct MealHypothesisState: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, ageCycles, maxScoreInObserving, maxEventualBgOffsetInObserving, committedInSession
-        case lastAgeMs, lastCommitMs, nonPositiveRunStartMs, maxScoreAtMs, maxOffsetAtMs
+        case state
+        case ageCycles
+        case maxScoreInObserving
+        case maxEventualBgOffsetInObserving
+        case committedInSession
+        case lastAgeMs
+        case lastCommitMs
+        case nonPositiveRunStartMs
+        case maxScoreAtMs
+        case maxOffsetAtMs
     }
 
     /// Fields added after the first release decode as 0 when absent, as AAPS V5StateStore reads them

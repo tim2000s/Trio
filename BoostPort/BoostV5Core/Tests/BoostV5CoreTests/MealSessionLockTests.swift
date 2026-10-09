@@ -31,11 +31,25 @@ final class MealSessionLockTests: XCTestCase {
             score: 0.6, eventualBg: 200, delta: 6, deltaAccl: 5, nowMs: t0
         )
         XCTAssertEqual(committed.state, .committed)
-        let recovering = step(committed, score: 0.5, eventualBg: 180, delta: 2, deltaAccl: -20,
-                              deltaDeclining: true, nowMs: at(5))
+        let recovering = step(
+            committed,
+            score: 0.5,
+            eventualBg: 180,
+            delta: 2,
+            deltaAccl: -20,
+            deltaDeclining: true,
+            nowMs: at(5)
+        )
         XCTAssertEqual(recovering.state, .recovering)
-        let idle = step(recovering, score: 0.4, eventualBg: 170, delta: -1, deltaAccl: -5,
-                        deltaDeclining: true, nowMs: at(10))
+        let idle = step(
+            recovering,
+            score: 0.4,
+            eventualBg: 170,
+            delta: -1,
+            deltaAccl: -5,
+            deltaDeclining: true,
+            nowMs: at(10)
+        )
         XCTAssertEqual(idle.state, .idle)
         return idle
     }
