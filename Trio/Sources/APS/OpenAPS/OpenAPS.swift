@@ -1044,20 +1044,12 @@ final class OpenAPS {
                         clock: clock
                     )) ?? false
 
-                    // Safety: the active override must not exceed the user's stock per-SMB size
-                    // cap (maxSMBBasalMinutes / maxUAMSMBBasalMinutes). Re-clamp to the exact
-                    // ceiling stock determine-basal uses; min() can only reduce the dose.
-                    if let currentBasal = profile.currentBasal, let currentIob = iob.first?.iob {
-                        let smbMaxBolus = DosingEngine.determineMaxBolus(
-                            currentBasal: currentBasal,
-                            currentIob: currentIob,
-                            adjustedCarbRatio: det.carbRatio ?? 1,
-                            mealData: meal,
-                            profile: profile,
-                            trioCustomOrefVariables: trioCustomOrefVariables
-                        )
-                        boostDose = min(boostDose, smbMaxBolus)
-                    }
+                    // No re-clamp to the basal-derived per-SMB limit (maxSMBBasalMinutes /
+                    // maxUAMSMBBasalMinutes). AAPS applies that limit only inside its V1 tier engine
+                    // and lets the V6 override replace the dose without it; the override is bounded
+                    // by the engine's state caps, maxIOB, the cumulative 60-min cap and pump Max
+                    // Bolus. Trio clamped here from 2026-06-28 (audit D1) until the 2026-10 soak
+                    // showed it held every Boost dose to 0.27-0.40 U against AAPS SMBs up to 3.9 U.
 
                     // Safety: respect the SMB interval (stock clamps it to 1...10 min, default 3).
                     // Only override when more than that has elapsed since the last bolus — matching
