@@ -127,8 +127,10 @@ final class V5ShadowReplayTests: XCTestCase {
             }.sorted()
             let aggression = confirmedRatios.isEmpty ? 1.0 : confirmedRatios[confirmedRatios.count / 2]
             if abs(aggression - 1.0) > 1E-6 {
-                print("   \(user): fitted Aggression knob \(String(format: "%.2f", aggression)) "
-                    + "from \(confirmedRatios.count) CONFIRMED rows")
+                print(
+                    "   \(user): fitted Aggression knob \(String(format: "%.2f", aggression)) "
+                        + "from \(confirmedRatios.count) CONFIRMED rows"
+                )
             }
 
             for c in cycles {

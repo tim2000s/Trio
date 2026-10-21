@@ -1112,6 +1112,8 @@ final class BaseAPSManager: APSManager, Injectable {
         case .confirmedCapU: return dbl(p.boostV5ConfirmedCapU)
         case .committedCapU: return dbl(p.boostV5CommittedCapU)
         case .cumulativeSmbCap60Min: return dbl(p.boostCumulativeSmbCap60Min)
+        case .boostMaxIob: return dbl(p.boostMaxIOB)
+        case .boostBolus: return dbl(p.boostBolus)
         case .primerCapU: return dbl(p.boostV5PrimerCapU)
         case .aggressiveEarlyConfirm,
              .fastCarbConfirm,
@@ -1261,6 +1263,8 @@ final class BaseAPSManager: APSManager, Injectable {
                     case .confirmedCapU: prefs.boostV5ConfirmedCapU = Decimal(value)
                     case .committedCapU: prefs.boostV5CommittedCapU = Decimal(value)
                     case .cumulativeSmbCap60Min: prefs.boostCumulativeSmbCap60Min = Decimal(value)
+                    case .boostMaxIob: prefs.boostMaxIOB = Decimal(value)
+                    case .boostBolus: prefs.boostBolus = Decimal(value)
                     case .primerCapU: prefs.boostV5PrimerCapU = Decimal(value)
                     case .aggressiveEarlyConfirm,
                          .fastCarbConfirm,
@@ -1475,6 +1479,8 @@ final class BaseAPSManager: APSManager, Injectable {
                     case .confirmedCapU: prefs.boostV5ConfirmedCapU = Decimal(value)
                     case .committedCapU: prefs.boostV5CommittedCapU = Decimal(value)
                     case .cumulativeSmbCap60Min: prefs.boostCumulativeSmbCap60Min = Decimal(value)
+                    case .boostMaxIob: prefs.boostMaxIOB = Decimal(value)
+                    case .boostBolus: prefs.boostBolus = Decimal(value)
                     case .primerCapU: prefs.boostV5PrimerCapU = Decimal(value)
                     case .aggressiveEarlyConfirm,
                          .fastCarbConfirm,

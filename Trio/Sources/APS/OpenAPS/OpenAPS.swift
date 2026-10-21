@@ -720,6 +720,10 @@ final class OpenAPS {
             throw DeterminationError.missingInputs
         }
 
+        // Boost active runs AAPS's V1 engine as the determination; it needs the SMB record and may
+        // persist its ML ring buffer only on a real cycle, never on a bolus-calculator preview.
+        let boostV1Context = BoostV1CycleContext.from(pumpHistory: pumpHistory, clock: clock, persistState: !simulation)
+
         var rawDetermination = try DeterminationGenerator.generate(
             profile: profile,
             preferences: preferences,
@@ -731,7 +735,8 @@ final class OpenAPS {
             glucose: glucose,
             microBolusAllowed: microBolusAllowed,
             trioCustomOrefVariables: trioCustomOrefVariables,
-            currentTime: clock
+            currentTime: clock,
+            boostV1Context: boostV1Context
         )
 
         // ── Boost V5 second pass (off | shadow | active). Same engine, two wirings:
@@ -756,13 +761,8 @@ final class OpenAPS {
             // v12 ML features: cumulative SMB volume over the last 60 min and minutes since the
             // last SMB (AAPS recentSmbVolume60Min / timeSinceLastSmbMin — type==SMB, valid; sum
             // amount over 60 min; tSince = min(720, …), default 720 when none).
-            let smbEvents = pumpHistory.filter { ($0.isSMB ?? false) && $0.timestamp <= clock }
-            let sixtyMinAgo = clock.addingTimeInterval(-3600)
-            let recentSmb60 = smbEvents
-                .filter { $0.timestamp >= sixtyMinAgo }
-                .reduce(0.0) { $0 + (($1.amount ?? 0) as NSDecimalNumber).doubleValue }
-            let timeSinceSmb = smbEvents.map(\.timestamp).max()
-                .map { min(720.0, clock.timeIntervalSince($0) / 60.0) } ?? 720.0
+            let recentSmb60 = boostV1Context.recentSmbVolume60Min
+            let timeSinceSmb = boostV1Context.timeSinceLastSmbMin
 
             // M2 fidelity: in SHADOW the first pass above is stock oref, so the determination
             // fed to the engine (eventualBG / insulinReq / predictions / minGuard) is NOT what
@@ -789,7 +789,8 @@ final class OpenAPS {
                     glucose: glucose,
                     microBolusAllowed: microBolusAllowed,
                     trioCustomOrefVariables: trioCustomOrefVariables,
-                    currentTime: clock
+                    currentTime: clock,
+                    boostV1Context: boostV1Context
                 ) {
                     engineDet = boostDet
                 }
@@ -830,7 +831,8 @@ final class OpenAPS {
                 timeSinceLastSmbMin: timeSinceSmb,
                 manualBolusWithinWindow: BoostV5Adapter.manualBolusWithinWindow(pumpHistory, clock: clock),
                 pumpSuspended: BoostV5Adapter.pumpSuspended(pumpHistory, clock: clock),
-                profileSwitchKey: BoostV5Adapter.profileSwitchKey(trioCustomOrefVariables)
+                profileSwitchKey: BoostV5Adapter.profileSwitchKey(trioCustomOrefVariables),
+                v1: engineDet.boostV1
             )
             det.reason += " " + result.reason
             // Set when the confirm tranche ran inside the override block this cycle. A hold left
@@ -849,13 +851,15 @@ final class OpenAPS {
                 // while asleep) and outside a step-based morning lie-in. Otherwise fall back to V1's
                 // base oref1 SMB (which respects night mode + its own hypo/minGuard gates) — because
                 // `asleep` reflects ONLY the HR sleep-state machine, never the boost-window gate.
-                let sleepInActive = BoostV5Adapter.sleepInActive(preferences: preferences, clock: clock)
                 // 2026-10-08 (AAPS 47a815aedf): the gate also closes inside the configured night
                 // window whatever the night-mode toggle says, and while the detector reads SLEEPING
-                // (held for one hysteresis period after a boundary exit, a33752c9aa #18). See
-                // BoostV5Adapter.boostGateOpen.
-                let boostActive = BoostV5Adapter.boostGateOpen(preferences: preferences, clock: clock)
-                    && !sleepInActive
+                // (held for one hysteresis period after a boundary exit, a33752c9aa #18), and under a
+                // high temp target unless allowed. The V1 engine evaluated the same gate this cycle
+                // (BoostV1Determination.boostActive); its value is used so the two cannot disagree.
+                let v1Gate = det.boostV1.map { ($0.boostActive, $0.sleepInActive) }
+                    ?? BoostV1Determination.boostActive(profile: profile, preferences: preferences, clock: clock)
+                let sleepInActive = v1Gate.1
+                let boostActive = v1Gate.0
                 if microBolusAllowed, !asleep, boostActive {
                     // Anti-stacking hard gate — faithful port of OpenAPSBoostPlugin.kt:1262. The
                     // rolling-60-min cumulative-SMB cap bounds dose FREQUENCY (per-shot caps don't);
@@ -952,11 +956,10 @@ final class OpenAPS {
                                     inMealState: result.decision.mealHypothesis == .committed,
                                     hardGateFired: result.decision.phase3.reductions.hardGateFired != nil,
                                     postRescueWindow: inPostRescueWindow,
-                                    // Trio has no separate Boost maxIOB, so the profile maxIOB is
-                                    // both terms of AAPS's min(boost_maxIOB, max_iob).
+                                    // AAPS min(boost_maxIOB, max_iob).
                                     ceilingU: ConfirmTranche.releaseCeiling(
                                         cycleDoseU: (sized as NSDecimalNumber).doubleValue,
-                                        maxIobU: (preferences.maxIOB as NSDecimalNumber).doubleValue,
+                                        maxIobU: det.boostV1?.v6MaxIob ?? (preferences.maxIOB as NSDecimalNumber).doubleValue,
                                         iobU: (iob.first?.iob as NSDecimalNumber?)?.doubleValue ?? 0,
                                         confirmedCapU: (preferences.boostV5ConfirmedCapU as NSDecimalNumber).doubleValue
                                     )
@@ -977,55 +980,9 @@ final class OpenAPS {
                         Self.confirmTranche.reset()
                     }
 
-                    // 2026-07-23 composed post-rescue rebound guard (AAPS 0eb4a65b39), with the
-                    // 2026-08-03 tight-ramp trial arm (2378baf367) layered on it.
-                    //
-                    // In AAPS the guard applies to the final microbolus of the V1 tier engine,
-                    // whose post-rescue tier block demotes the scaled tiers to unscaled ones, so a
-                    // delta-inflated requirement still delivered full-size boluses into an
-                    // unannounced rescue-carb rebound: 3.55 U at 97 mg/dL, 25 minutes after a low of
-                    // 67, a second insulin-driven hypo, and the loop disabled by the user. Trio has
-                    // no V1 tier engine, so the analogue is the final Boost dose here, after the
-                    // caps and the tranche. Applied only inside the post-rescue window with no carbs
-                    // on board. It is restraint only, so it can never increase a dose.
-                    //
-                    // AAPS priced the guard at 34% [32, 37] of the removed insulin sitting directly
-                    // ahead of a second low below 70, against 27% for the earlier cap and 14 to 19%
-                    // for other levers, costing 9% of affected episodes as genuine post-hypo meals
-                    // at a median 0.8 U under-delivery. That pricing was measured on V1 tier doses,
-                    // so it bounds the direction here rather than the magnitude.
-                    let cobNow = (det.cob ?? 0)
-                    if inPostRescueWindow, cobNow == 0, boostDose > 0 {
-                        let bgForGuard = (glucoseStatus.glucose as NSDecimalNumber).doubleValue
-                        let tightRamp = preferences.boostV5PostRescueTightRampTrial
-                            && PostRescueTrial.tightRampArm(
-                                seed: BoostTrialSeed.seed,
-                                dayIndex: Int(floor(clock.timeIntervalSince1970 / 86400))
-                            )
-                        if let scale = SafetyGateConstants.postRescueScale(bg: bgForGuard, tightRamp: tightRamp) {
-                            let pre = boostDose
-                            let step = preferences.bolusIncrement > 0 ? preferences.bolusIncrement : 0.05
-                            boostDose = Decimal(
-                                floor(
-                                    (pre as NSDecimalNumber).doubleValue * scale
-                                        / (step as NSDecimalNumber).doubleValue + 1E-9
-                                )
-                            ) * step
-                            det.reason += " post-rescue rebound scale \(Int((scale * 100).rounded()))%" +
-                                (tightRamp ? " [trial:tight]" : "") +
-                                ": SMB \(String(format: "%.2f", (pre as NSDecimalNumber).doubleValue))→" +
-                                "\(String(format: "%.2f", (boostDose as NSDecimalNumber).doubleValue));"
-                        }
-                    }
-                    // Emitted every cycle so trial exposure is countable on days the guard never
-                    // fired, matching the Kotlin.
-                    if preferences.boostV5PostRescueTightRampTrial {
-                        let arm = PostRescueTrial.tightRampArm(
-                            seed: BoostTrialSeed.seed,
-                            dayIndex: Int(floor(clock.timeIntervalSince1970 / 86400))
-                        )
-                        det.reason += " prTrial=\(arm ? "tight" : "control");"
-                    }
+                    // The composed post-rescue rebound guard (AAPS 0eb4a65b39) and its tight-ramp trial
+                    // arm (2378baf367) scale the V1 tier dose inside the engine, as in AAPS; the V6 dose
+                    // is not scaled again here. The trial tag is written by BoostV1Determination.
                     let nonMealCapped = caps.cap == .nonMeal
                     let postRescueCapped = caps.cap == .postRescue
 

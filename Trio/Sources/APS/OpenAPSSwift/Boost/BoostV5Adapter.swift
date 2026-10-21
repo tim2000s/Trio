@@ -79,7 +79,7 @@ enum BoostV5Adapter {
         determination: Determination,
         glucoseStatus: GlucoseStatus,
         glucose: [BloodGlucose],
-        iobData: [IobResult],
+        iobData _: [IobResult],
         maxIob: Double,
         roundSmbTo: Double,
         microBolusAllowed: Bool,
@@ -89,8 +89,8 @@ enum BoostV5Adapter {
         // Cumulative SMB volume in the last 60 min and minutes since the last SMB — v12 ML
         // features (AAPS recentSmbVolume60Min / timeSinceLastSmbMin). Defaults match AAPS
         // (0 U / 720 min) for the legacy 8-feature model where they are unused.
-        recentSmbUnits60m: Double = 0.0,
-        timeSinceLastSmbMin: Double = 720.0,
+        recentSmbUnits60m _: Double = 0.0,
+        timeSinceLastSmbMin _: Double = 720.0,
         // 2026-10-05 announced meal (AAPS 82f47416c5): a manual or external bolus within
         // mealAnnouncedBolusWindowMs. Carbs on board are read from the determination below.
         manualBolusWithinWindow: Bool = false,
@@ -98,6 +98,8 @@ enum BoostV5Adapter {
         // the identity of the insulin-scaling override in force (nil when it could not be read).
         pumpSuspended: Bool = false,
         profileSwitchKey: String? = nil,
+        // What the V1 engine computed this cycle (nil when the determination did not come from it).
+        v1: BoostV1Telemetry? = nil,
         store: BoostV5Store = .shared
     ) -> Result {
         let delta = (glucoseStatus.delta as NSDecimalNumber).doubleValue
@@ -119,80 +121,25 @@ enum BoostV5Adapter {
         let minGuardThreshold = dbl(determination.threshold) ?? 80.0
         let hour = Calendar.current.component(.hour, from: clock)
 
-        // ── ML scores (Layer-A retrofit): pure-Swift LightGBM inference on 8 features. ──
-        // basaliob / activity come from the current IOB sample; the rest from the
-        // determination + glucose status. nil if the bundled model didn't load.
-        let current = iobData.first
-        let iobTotal = current.map { ($0.iob as NSDecimalNumber).doubleValue } ?? iob
-        let iobBasal = current.map { ($0.basaliob as NSDecimalNumber).doubleValue } ?? 0.0
-        let iobActivity = current.map { ($0.activity as NSDecimalNumber).doubleValue } ?? 0.0
-        let iobNetBasal = current.map { ($0.netbasalinsulin as NSDecimalNumber).doubleValue } ?? 0.0
-        let directionNumValue = directionNum(shortAvgDelta: shortAvg)
-        let minDelta = dbl(determination.minDelta) ?? 0.0
-        let mlFeatures = BoostMLModels.Features(
-            cgmMgdl: bg,
-            iobTotal: iobTotal,
-            iobBasal: iobBasal,
-            bgAboveTarget: bg - targetBg,
-            directionNum: directionNumValue,
-            hour: Double(hour),
-            iobActivity: iobActivity,
-            insulinReq: signedInsulinReq
-        )
-        // Hypo risk: route on the LOADED model's feature count. 8 → legacy v9 path; otherwise the
-        // v12 53-feature windowed-lookback path (BoostMlFeatureBuilder + persisted 6-cycle ring
-        // buffer), matching AAPS DetermineBasalBoost's getFeatureNames() dispatch. The current
-        // snapshot is pushed to the ring each cycle and persisted across restarts.
-        let rawHypoRisk: Double?
-        if let names = BoostMLModels.hypoFeatureNames(), names.count != 8 {
-            let statics: [String: Double] = [
-                "cgm_mgdl": bg,
-                "iob_iob": iobTotal,
-                "iob_basaliob": iobBasal,
-                "bg_above_target": bg - targetBg,
-                "direction_num": directionNumValue,
-                "hour": Double(hour),
-                "iob_activity": iobActivity,
-                "sug_insulinReq": signedInsulinReq,
-                "sug_COB": dbl(determination.cob) ?? 0.0,
-                "sug_eventualBG": eventualBg,
-                "sug_expectedDelta": dbl(determination.expectedDelta) ?? 0.0,
-                "sug_minDelta": minDelta,
-                "sug_TDD": max(0.0, dbl(determination.tdd) ?? 0.0),
-                // AAPS feeds iob_bolusiob as max(0, iob − basaliob) at runtime (training-time semantics).
-                "iob_bolusiob": max(0.0, iobTotal - iobBasal),
-                "iob_netbasalinsulin": iobNetBasal,
-                "recent_smb_units_60m": recentSmbUnits60m,
-                "time_since_last_smb_min": timeSinceLastSmbMin
-            ]
-            let snapshot = BoostMlFeatureBuilder.CycleSnapshot(
-                ts: clock.timeIntervalSince1970 * 1000.0,
-                cgmMgdl: bg,
-                iobIob: iobTotal,
-                iobActivity: iobActivity,
-                sugEventualBG: eventualBg,
-                recentSmbUnits60m: recentSmbUnits60m,
-                sugMinDelta: minDelta
-            )
-            var ring = BoostMlRingBufferStore.load()
-            ring.push(snapshot)
-            let vector = BoostMlFeatureBuilder.build(
-                featureNames: names, current: snapshot, ring: ring, staticValues: statics
-            )
-            BoostMlRingBufferStore.save(ring)
-            rawHypoRisk = BoostMLModels.hypoRisk(vector: vector)
-        } else {
-            rawHypoRisk = BoostMLModels.hypoRisk(mlFeatures)
-        }
-        // AAPS rounds both ML outputs to 3 dp before the engine consumes them.
-        let mlHypoRisk = rawHypoRisk.map { ($0 * 1000).rounded() / 1000 }
-        let mlMealLikely = BoostMLModels.mealLikely(mlFeatures).map { ($0 * 1000).rounded() / 1000 }
+        // ML scores come from the V1 engine, which ran the models at its dosing section with its own
+        // insulinReq and target (AAPS V5 reads rT.mlHypoRisk / rT.mlMealLikely). A cycle on which V1
+        // returned before that section has no scores, as in AAPS, and V6 renormalises without them.
+        let mlHypoRisk = v1?.mlHypoRisk
+        let mlMealLikely = v1?.mlMealLikely
         // Phase-3 postActionRiskCheck is now WIRED (2026-07-02, AAPS 921a56ea27) — see the
         // riskAtProjectedIob closure passed into V5Inputs below.
 
         // ── HealthKit activity (steps + HR) → V5 exercise modifiers. Snapshot is kept fresh
         // by BoostActivityMonitor; flags() guards on staleness. Inert until Health read is granted. ──
         let activity = BoostActivityStore.shared.flags(now: clock)
+
+        // V6's own target, IOB ceiling, hypo threshold and recent low are V1's inputs (AAPS opb.target_bg,
+        // min(opb.boost_maxIOB, opb.max_iob), opb.lgsThreshold ?: 80, opb.recentLowBG), not V1's
+        // adjusted outputs.
+        let v6TargetBg = v1?.inputTargetBg ?? targetBg
+        let v6MaxIob = v1?.v6MaxIob ?? maxIob
+        let v6Threshold = v1.map { $0.lgsThreshold ?? 80.0 } ?? minGuardThreshold
+        let v6RecentLow = v1?.recentLowBg ?? recentLowBg(glucose, now: clock)
 
         // Time-jump / long-gap reset: minutes since the last decide(). A normal ~5-min cycle is
         // <30 (no reset); a clock jump, timezone change, long loop/pump gap, or app restart (state
@@ -234,13 +181,13 @@ enum BoostV5Adapter {
                 deltaAccl: deltaAccl,
                 bg: bg,
                 eventualBg: eventualBg,
-                targetBg: targetBg,
+                targetBg: v6TargetBg,
                 maxDelta: maxDelta,
                 minGuardBg: minGuardBg,
-                minGuardThreshold: minGuardThreshold,
+                minGuardThreshold: v6Threshold,
                 deltaHistory: [longAvg, shortAvg, delta],
                 iob: iob,
-                maxIob: maxIob,
+                maxIob: v6MaxIob,
                 baseInsulinReq: baseInsulinReq,
                 roundSmbTo: roundSmbTo,
                 // AAPS: enableSmbPreChecks = activeMode ? microBolusAllowed : true. In shadow it stays
@@ -257,7 +204,7 @@ enum BoostV5Adapter {
                 riskAtProjectedIob: { projIob in
                     BoostMLModels.hypoRiskAtProjectedIob(projIob) ?? (mlHypoRisk ?? 0.0)
                 },
-                recentLowBg: recentLowBg(glucose, now: clock),
+                recentLowBg: v6RecentLow,
                 cumulativeRise30min: max(0.0, shortAvg * 6.0),
                 hour: hour,
                 // 2026-07-07 (AAPS 2a9d096d8b F2): exercise inputs are now wired LIVE from the V1

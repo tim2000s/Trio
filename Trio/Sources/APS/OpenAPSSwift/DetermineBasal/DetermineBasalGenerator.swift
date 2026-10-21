@@ -23,7 +23,11 @@ enum DeterminationGenerator {
         glucose: [BloodGlucose],
         microBolusAllowed: Bool,
         trioCustomOrefVariables: TrioCustomOrefVariables,
-        currentTime: Date
+        currentTime: Date,
+        // Boost active mode runs the V1 engine, which needs the SMB record and to know whether it
+        // may persist learned state. Nil for callers that never run Boost (stock path unchanged);
+        // a Boost-active caller without a context gets the preview context.
+        boostV1Context: BoostV1CycleContext? = nil
     ) throws -> Determination? {
         let glucoseStatus = try Self.getGlucoseStatus(glucoseReadings: glucose)
         guard let glucoseStatus = glucoseStatus else { throw DeterminationError.missingInputs }
@@ -43,7 +47,9 @@ enum DeterminationGenerator {
             // this entry point holds. Nil outside Boost active mode, and for direct test callers.
             boostRecentLowBg45Min: preferences.boostMode == .active
                 ? BoostV5Adapter.recentLowBg45Min(glucose, now: currentTime)
-                : nil
+                : nil,
+            boostV1Context: preferences.boostMode == .active ? (boostV1Context ?? .preview) : nil,
+            boostGlucose: glucose
         )
     }
 
@@ -62,7 +68,9 @@ enum DeterminationGenerator {
         microBolusAllowed: Bool,
         trioCustomOrefVariables: TrioCustomOrefVariables,
         currentTime: Date,
-        boostRecentLowBg45Min: Double? = nil
+        boostRecentLowBg45Min: Double? = nil,
+        boostV1Context: BoostV1CycleContext? = nil,
+        boostGlucose: [BloodGlucose] = []
     ) throws -> Determination? {
         var autosensData = autosensData
 
@@ -75,6 +83,40 @@ enum DeterminationGenerator {
         )
 
         let currentGlucose: Decimal = glucoseStatus.glucose
+
+        // Boost active: the determination is AAPS's V1 Boost engine (BoostV1Engine), which carries
+        // its own stale-data, low-glucose and SMB logic. Only Trio's check that the running temp
+        // matches the pump record runs first.
+        if preferences.boostMode == .active, let boostV1Context {
+            guard let lastTemp = iobData.first?.lastTemp else { throw DeterminationError.missingIob }
+            if let reason = checkCurrentTempBasalRateSafety(
+                currentTemp: currentTemp,
+                lastTempTarget: lastTemp,
+                currentTime: currentTime
+            ) {
+                return Determination(
+                    id: UUID(), reason: reason, units: nil, insulinReq: nil, eventualBG: nil, sensitivityRatio: nil,
+                    rate: 0, duration: 0, iob: nil, cob: nil, predictions: nil, deliverAt: currentTime, carbsReq: nil,
+                    temp: .absolute, bg: nil, reservoir: nil, isf: nil, timestamp: nil, tdd: nil, current_target: nil,
+                    minDelta: nil, expectedDelta: nil, minGuardBG: nil, minPredBG: nil, threshold: nil, carbRatio: nil,
+                    received: false
+                )
+            }
+            return try BoostV1Determination.determine(
+                profile: profile,
+                preferences: preferences,
+                currentTemp: currentTemp,
+                iobData: iobData,
+                mealData: mealData,
+                orefAutosensRatio: autosensData.ratio,
+                glucoseStatus: glucoseStatus,
+                glucose: boostGlucose,
+                microBolusAllowed: microBolusAllowed,
+                trioCustomOrefVariables: trioCustomOrefVariables,
+                currentTime: currentTime,
+                context: boostV1Context
+            )
+        }
 
         if let errorDetermination = try handleTempBasalCases(
             glucoseStatus: glucoseStatus,
@@ -263,46 +305,18 @@ enum DeterminationGenerator {
 
         // Boost V6: in active mode, fire an anticipatory low target inside the learned pre-meal
         // window (lower-only), so insulinReq rises before carbs land. Suppressed during exercise.
-        var boostPreMealNote: String?
-        if preferences.boostMode == .active,
-           preferences.boostV6PreMealEnabled,
-           !BoostActivityStore.shared.flags(now: currentTime).exerciseActive
-        {
-            let offsetMs = Double(TimeZone.current.secondsFromGMT(for: currentTime)) * 1000.0
-            let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
-                + Calendar.current.component(.minute, from: currentTime)
-            let leadMax = Int((preferences.boostV6PreMealLeadMin as NSDecimalNumber).doubleValue)
-            let nightWindow = BoostV5Adapter.nightWindowMinutes(preferences)
-            // 2026-10-08 (AAPS a33752c9aa #8): learned sessions inside the night window are dropped,
-            // and the target applies only outside the window, with the detector neither SLEEPING nor
-            // PRE_SLEEP, with no temp target and outside the post-rescue window.
-            let history = BoostMealTimeStore.shared.historyWithoutNightEvents(
-                nightStartMin: nightWindow.start, nightEndMin: nightWindow.end, localOffsetMs: offsetMs
-            )
-            if MealTimeLearner.preMealWindow(
-                history,
-                nowMin: nowMin,
-                localOffsetMs: offsetMs,
-                leadMaxMin: leadMax
-            ) != nil {
-                if let why = MealTimeLearner.preMealTargetBlock(
-                    inNightWindow: BoostGate.inNightWindow(
-                        nowMinuteOfDay: nowMin, startMinute: nightWindow.start, endMinute: nightWindow.end
-                    ),
-                    sleepState: BoostActivityStore.shared.sleep(now: currentTime).state,
-                    tempTargetActive: profile.temptargetSet ?? false,
-                    postRescueWindow: (boostRecentLowBg45Min ?? .infinity) < SafetyGateConstants.postRescueLowThresholdMgdl
-                ) {
-                    boostPreMealNote = "V6 pre-meal SUPPRESSED (\(why)); "
-                } else {
-                    let preTarget = preferences.boostV6PreMealTargetMgdl
-                    if preTarget < adjustedGlucoseTargets.targetGlucose {
-                        adjustedGlucoseTargets.targetGlucose = preTarget
-                        adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
-                        adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
-                    }
-                }
-            }
+        let boostPreMeal = boostPreMealTarget(
+            preferences: preferences,
+            profile: profile,
+            currentTargetGlucose: adjustedGlucoseTargets.targetGlucose,
+            recentLowBg45Min: boostRecentLowBg45Min ?? .infinity,
+            currentTime: currentTime
+        )
+        let boostPreMealNote = boostPreMeal.note
+        if let preTarget = boostPreMeal.target {
+            adjustedGlucoseTargets.targetGlucose = preTarget
+            adjustedGlucoseTargets.minGlucose = min(adjustedGlucoseTargets.minGlucose, preTarget)
+            adjustedGlucoseTargets.maxGlucose = min(adjustedGlucoseTargets.maxGlucose, preTarget)
         }
 
         let glucoseImpactSeries = buildGlucoseImpactSeries(iobDataSeries: iobData, sensitivity: adjustedSensitivity)
@@ -726,6 +740,45 @@ enum DeterminationGenerator {
             currentTemp: currentTemp,
             determination: determination
         )
+    }
+
+    /// The V6 anticipatory pre-meal target for this cycle (AAPS 7b), lower-only: the target to use
+    /// when it applies and is below `currentTargetGlucose`, and a reason note when it was suppressed.
+    /// Active mode only; suppressed during exercise, inside the night window, while asleep, under a
+    /// temp target and in the post-rescue window (AAPS a33752c9aa #8).
+    static func boostPreMealTarget(
+        preferences: Preferences,
+        profile: Profile,
+        currentTargetGlucose: Decimal,
+        recentLowBg45Min: Double,
+        currentTime: Date
+    ) -> (target: Decimal?, note: String?) {
+        guard preferences.boostMode == .active,
+              preferences.boostV6PreMealEnabled,
+              !BoostActivityStore.shared.flags(now: currentTime).exerciseActive
+        else { return (nil, nil) }
+        let offsetMs = Double(TimeZone.current.secondsFromGMT(for: currentTime)) * 1000.0
+        let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
+            + Calendar.current.component(.minute, from: currentTime)
+        let leadMax = Int((preferences.boostV6PreMealLeadMin as NSDecimalNumber).doubleValue)
+        let nightWindow = BoostV5Adapter.nightWindowMinutes(preferences)
+        let history = BoostMealTimeStore.shared.historyWithoutNightEvents(
+            nightStartMin: nightWindow.start, nightEndMin: nightWindow.end, localOffsetMs: offsetMs
+        )
+        guard MealTimeLearner.preMealWindow(history, nowMin: nowMin, localOffsetMs: offsetMs, leadMaxMin: leadMax) != nil
+        else { return (nil, nil) }
+        if let why = MealTimeLearner.preMealTargetBlock(
+            inNightWindow: BoostGate.inNightWindow(
+                nowMinuteOfDay: nowMin, startMinute: nightWindow.start, endMinute: nightWindow.end
+            ),
+            sleepState: BoostActivityStore.shared.sleep(now: currentTime).state,
+            tempTargetActive: profile.temptargetSet ?? false,
+            postRescueWindow: recentLowBg45Min < SafetyGateConstants.postRescueLowThresholdMgdl
+        ) {
+            return (nil, "V6 pre-meal SUPPRESSED (\(why)); ")
+        }
+        let preTarget = preferences.boostV6PreMealTargetMgdl
+        return (preTarget < currentTargetGlucose ? preTarget : nil, nil)
     }
 
     static func checkDeterminationInputs(

@@ -2,15 +2,19 @@ import Foundation
 
 /// The knobs Boost auto-config manages, each with a per-knob resolution mark persisted by the host
 /// (`Preferences.boostV5AutoConfigResolved`, raw values of this enum). Mirrors the AAPS managed-key
-/// list (b2c0705e5e) minus maxIOB/maxBolus, which Trio deliberately does NOT manage: the suggestion
-/// merely carries the user's own existing values over, so writing them back would be an identity
-/// write.
+/// list (b2c0705e5e). The V1 engine's own max IOB and bolus cap (`boostMaxIob`, `boostBolus`) joined
+/// it in October 2026 with the port of that engine: AAPS carries the user's max IOB and max bolus into
+/// them, and before the port Trio had no separate keys for them.
 public enum BoostAutoConfigKnob: String, CaseIterable, Sendable {
     case aggression
     case hypoCaution
     case confirmedCapU
     case committedCapU
     case cumulativeSmbCap60Min
+    /// The V1 tier engine's IOB limit (AAPS ApsBoostMaxIob), carried from the user's max IOB.
+    case boostMaxIob
+    /// The V1 tier engine's per-SMB cap (AAPS ApsBoostBolus), carried from the user's max bolus.
+    case boostBolus
     case fastCarbConfirm
     /// 2026-07-17 insulin-adding opt-in switches. Auto-config managed on the same once-only
     /// resolution as `fastCarbConfirm`, but derived from the strict well-controlled cut rather than
@@ -28,7 +32,8 @@ public enum BoostAutoConfigKnob: String, CaseIterable, Sendable {
     /// The double-valued knobs `applyAutoConfig` resolves (stable order). The boolean knobs are
     /// handled separately by the host, as in the AAPS plugin.
     public static let doubleKnobs: [BoostAutoConfigKnob] = [
-        .aggression, .hypoCaution, .confirmedCapU, .committedCapU, .cumulativeSmbCap60Min, .primerCapU
+        .aggression, .hypoCaution, .confirmedCapU, .committedCapU, .cumulativeSmbCap60Min, .boostMaxIob, .boostBolus,
+        .primerCapU
     ]
 
     /// The boolean knobs, which the host applies only while the preference still sits at its
@@ -237,6 +242,8 @@ public enum BoostV5AutoConfigApply {
             confirmedCapU: operative[.confirmedCapU]!,
             committedCapU: operative[.committedCapU]!
         ))
+        resolve(.boostMaxIob, suggestion.maxIobU)
+        resolve(.boostBolus, suggestion.bolusCapU)
         // Primer ceiling, resolved after the caps so it can be sized from the FINAL operative
         // committed cap rather than the derivation's own, for the same reason the cumulative cap is.
         // The primer is an advance on the commit shot, so a kept user cap must bound it too.

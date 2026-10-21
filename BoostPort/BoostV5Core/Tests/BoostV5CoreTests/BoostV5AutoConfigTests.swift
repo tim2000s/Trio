@@ -157,6 +157,8 @@ final class BoostV5AutoConfigTests: XCTestCase {
         case .confirmedCapU: return 2.5
         case .committedCapU: return 0.5
         case .cumulativeSmbCap60Min: return 10.0
+        case .boostMaxIob: return 1.0
+        case .boostBolus: return 2.5
         case .primerCapU: return 0.0 // derived from the committed cap; no separate factory value
         case .aggressiveEarlyConfirm,
              .fastCarbConfirm,

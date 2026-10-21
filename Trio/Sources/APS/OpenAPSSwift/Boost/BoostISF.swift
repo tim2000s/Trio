@@ -151,6 +151,51 @@ enum BoostISF {
         )
     }
 
+    /// The ISF fields AAPS calculateBoostIsf hands the V1 engine: sensNormalTarget and variableSens
+    /// rounded to 0.1 (variableSens from the unrounded ISF at target, at the soft-capped current BG,
+    /// without the circadian factor, which the engine applies itself), the soft-capped BG, and the
+    /// TDD the ISF came from (0 when the TDD model is off or its value was rejected).
+    static func v1Inputs(
+        profileSens: Decimal,
+        currentGlucose: Decimal,
+        tdd: Decimal,
+        profilePercent: Double,
+        autosens: AutosensContext,
+        profile: Profile,
+        preferences: Preferences
+    ) -> (sensNormalTarget: Double, variableSens: Double, bgCapped: Double, tdd: Double) {
+        let sensNT = unroundedSensNormalTarget(
+            profileSens: profileSens,
+            tdd: tdd,
+            profilePercent: profilePercent,
+            autosens: autosens,
+            profile: profile,
+            preferences: preferences
+        )
+        let bg = dbl(currentGlucose)
+        let bgCap = dbl(preferences.boostDynIsfBgCap)
+        let bgCapped = bg > bgCap ? bgCap + (bg - bgCap) / 3.0 : bg
+        let variable = DynIsf.getIsfByProfile(
+            bg: bg,
+            normalTarget: dbl(preferences.boostDynIsfNormalTarget),
+            insulinDivisor: insulinDivisor(profile: profile, preferences: preferences),
+            sensNormalTarget: sensNT,
+            velocity: effectiveVelocity(preferences),
+            bgCap: bgCap,
+            useCap: true
+        )
+        let tddValue = dbl(tdd)
+        let tddAdjusted = tddValue * dbl(preferences.boostDynIsfAdjustmentFactor) / 100.0
+        let usedTdd = preferences.boostUseTdd && tddValue > 0
+            && !DynIsf.tddImplausibleForProfile(tdd: tddAdjusted, profileSens: dbl(profileSens))
+        return (
+            (sensNT * 10.0).rounded() / 10.0,
+            (variable * 10.0).rounded() / 10.0,
+            bgCapped,
+            usedTdd ? tddAdjusted : 0
+        )
+    }
+
     /// BG impact on ISF as the engine uses it: 0 with TDD-based ISF off (AAPS 3d9d471dbb).
     static func effectiveVelocity(_ preferences: Preferences) -> Double {
         DynIsf.effectiveVelocity(useTdd: preferences.boostUseTdd, velocityPct: dbl(preferences.boostDynIsfVelocity))
