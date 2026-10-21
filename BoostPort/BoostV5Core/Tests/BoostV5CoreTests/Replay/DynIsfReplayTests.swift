@@ -97,10 +97,8 @@ final class DynIsfReplayTests: XCTestCase {
         blended.printSummary()
         final.printSummary()
         if !outOfScope.isEmpty {
-            print(
-                "   out-of-scope variants skipped: "
-                    + outOfScope.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
-            )
+            print("   out-of-scope variants skipped: "
+                + outOfScope.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
         }
         XCTAssertGreaterThan(blended.checked, 1000)
         XCTAssertGreaterThanOrEqual(blended.matchFraction, 0.97, "blendedTdd diverged on \(blended.failures) rows")
