@@ -1008,15 +1008,11 @@ final class OpenAPS {
                     // Bolus. Trio clamped here from 2026-06-28 (audit D1) until the 2026-10 soak
                     // showed it held every Boost dose to 0.27-0.40 U against AAPS SMBs up to 3.9 U.
 
-                    // Safety: respect the SMB interval (stock clamps it to 1...10 min, default 3).
-                    // Only override when more than that has elapsed since the last bolus — matching
-                    // stock determineSMBDelivery — so the override cannot fire an SMB every loop when
-                    // the user configured a longer interval.
-                    var smbInterval = Decimal(3)
-                    if !profile.smbInterval.isNaN { smbInterval = min(10, max(1, profile.smbInterval)) }
-                    let lastBolusAgeMin: Decimal? = iob.first?.lastBolusTime.map {
-                        (Decimal(clock.timeIntervalSince1970 * 1000) - Decimal($0)) / 60000
-                    }
+                    // The SMB interval is not checked here. AAPS replaces the SMB unconditionally at
+                    // this point and enforces the interval once, in LoopPlugin, on whatever SMB the
+                    // determination carries (the check after night mode below). A second check here
+                    // that held V6 aside let V1's dose through on loops a few seconds short of the
+                    // interval (round 4 soak, 2026-10-22: 1.4 U delivered where V6 sized 0.20 U).
                     if smbUserDisabled {
                         det.units = 0
                         det.reason += " V6 suppressed (SMB off: temp target / schedule);"
@@ -1025,7 +1021,7 @@ final class OpenAPS {
                         det
                             .reason +=
                             " V6 suppressed (cumulative SMB cap \(String(format: "%.2f", recentSmb60))U/\(String(format: "%.2f", cumulativeCap))U reached);"
-                    } else if let age = lastBolusAgeMin, age > smbInterval {
+                    } else {
                         det.units = boostDose
                         // 2026-07 composed brake-floor breadcrumb (AAPS 730b3dcb2c): when the
                         // toggle is ON, decision.floorWouldAdd carries the uplift the floor
@@ -1051,8 +1047,6 @@ final class OpenAPS {
                                 "\(String(format: "%.3f", (preCapDose as NSDecimalNumber).doubleValue))U, " +
                                 "state=\(result.decision.mealHypothesis.rawValue));"
                         }
-                    } else {
-                        det.reason += " V6 SMB held (\(smbInterval)m SMB interval not elapsed);"
                     }
 
                     // 2026-07-20 early-primer delivery. Skipped once the rolling cumulative cap is
@@ -1146,6 +1140,19 @@ final class OpenAPS {
                 if night.suppress {
                     det.units = 0
                     det.reason += " nightMode(SMB suppressed)"
+                }
+                // AAPS LoopPlugin's check for multiple SMBs, applied last as AAPS applies it after the
+                // APS returns: withhold any SMB while the newest bolus is younger than the interval
+                // (clamped 1...10 min as stock clamps it). The stock path keeps its own check.
+                var smbInterval = Decimal(3)
+                if !profile.smbInterval.isNaN { smbInterval = min(10, max(1, profile.smbInterval)) }
+                if let units = det.units, units > 0,
+                   BoostV1Determination.smbFrequencyExceeded(
+                       lastBolusTimeMs: iob.first?.lastBolusTime, now: clock, smbIntervalMin: smbInterval
+                   )
+                {
+                    det.units = 0
+                    det.reason += " SMB \(units)U withheld (still in \(smbInterval) min SMB interval);"
                 }
             }
             rawDetermination = det

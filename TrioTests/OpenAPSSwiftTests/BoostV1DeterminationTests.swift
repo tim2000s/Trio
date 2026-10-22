@@ -129,6 +129,25 @@ import Testing
         #expect(BoostV1Determination.recentLowBg60Min([], now: now) == 999)
     }
 
+    @Test("The loop's SMB interval check has no slack, as in AAPS LoopPlugin") func smbFrequency() {
+        let nowMs = UInt64(now.timeIntervalSince1970 * 1000)
+        // 4 min 59 s since the last bolus with a 5-minute interval: V1's own check (6 s slack)
+        // would dose; the loop check withholds it.
+        #expect(BoostV1Determination.smbFrequencyExceeded(
+            lastBolusTimeMs: nowMs - 299_000, now: now, smbIntervalMin: 5
+        ))
+        // At exactly the interval AAPS allows it (last + interval > now is false).
+        #expect(!BoostV1Determination.smbFrequencyExceeded(
+            lastBolusTimeMs: nowMs - 300_000, now: now, smbIntervalMin: 5
+        ))
+        #expect(!BoostV1Determination.smbFrequencyExceeded(
+            lastBolusTimeMs: nowMs - 301_000, now: now, smbIntervalMin: 5
+        ))
+        // No bolus on record never blocks.
+        #expect(!BoostV1Determination.smbFrequencyExceeded(lastBolusTimeMs: 0, now: now, smbIntervalMin: 5))
+        #expect(!BoostV1Determination.smbFrequencyExceeded(lastBolusTimeMs: nil, now: now, smbIntervalMin: 5))
+    }
+
     @Test("Insulin peak as AAPS coerces it") func insulinPeak() {
         var prefs = Preferences()
         var p = Profile()

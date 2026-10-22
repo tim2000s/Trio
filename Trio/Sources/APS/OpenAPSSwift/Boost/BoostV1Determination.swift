@@ -90,6 +90,17 @@ enum BoostV1Determination {
         return Int((midnight.timeIntervalSince1970 / 86400).rounded(.down))
     }
 
+    /// AAPS LoopPlugin's "safety check for multiple SMBs", which runs after the APS has returned and
+    /// zeroes whatever SMB it asked for while the newest bolus is younger than the SMB interval
+    /// (ApsMaxSmbFrequency). It covers the V6 dose and V1's alike. V1 has its own check with six
+    /// seconds of slack, so on a loop that runs a few seconds short of the interval V1 doses and this
+    /// check withholds it. No bolus on record (lastBolusTime 0 or absent) never blocks.
+    static func smbFrequencyExceeded(lastBolusTimeMs: UInt64?, now: Date, smbIntervalMin: Decimal) -> Bool {
+        guard let last = lastBolusTimeMs, last != 0 else { return false }
+        let intervalMs = Double(truncating: (smbIntervalMin * 60000) as NSDecimalNumber)
+        return Double(last) + intervalMs > now.timeIntervalSince1970 * 1000
+    }
+
     /// The Boost gate (AAPS calculateBoostActivity's boostActive): closed in the night window or
     /// night/sleep period, while SLEEPING under V6, under a high temp target unless allowed, and in
     /// a step-confirmed morning lie-in.
